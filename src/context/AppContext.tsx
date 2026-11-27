@@ -1,4 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import { io } from 'socket.io-client';
+import { api, setAuthToken } from '../services/api';
 import { 
   UserProfile, 
   UserRole, 
@@ -8,34 +10,31 @@ import {
   ResourceRequest, 
   PatientAppointment, 
   NotificationItem, 
-  BedStatus 
+  BedStatus,
+  Hospital,
+  District
 } from '../types';
-import { 
-  INITIAL_BEDS, 
-  INITIAL_EQUIPMENT, 
-  INITIAL_RESOURCE_REQUESTS, 
-  INITIAL_APPOINTMENTS, 
-  INITIAL_NOTIFICATIONS 
-} from '../data/mockData';
 
 interface AppContextType {
   user: UserProfile | null;
-  // Temporary In-Memory Onboarding State (RESET on page refresh or backward navigation)
+  // Temporary In-Memory Onboarding State
   tempOnboarding: TemporaryOnboardingState;
   resetTempOnboarding: () => void;
-  updateTempProfile: (name: string, username: string) => void;
+  updateTempProfile: (name: string, username: string) => Promise<void>;
   updateTempDistrict: (districtId: string, districtName: string) => void;
   updateTempHospital: (hospitalId: string, hospitalName: string) => void;
   updateTempRole: (role: UserRole) => void;
   clearTempRole: () => void;
   clearTempHospital: () => void;
   clearTempDistrict: () => void;
-  // Finalizing Onboarding
-  completeVerificationApproval: () => void;
-  simulateAdminDecision: (decision: 'approved' | 'rejected', reason?: string) => void;
-  requestRoleApproval: () => void;
+  // Finalizing Onboarding via Backend API
+  completeVerificationApproval: () => Promise<void>;
+  simulateAdminDecision: (decision: 'approved' | 'rejected', reason?: string) => Promise<void>;
+  requestRoleApproval: () => Promise<void>;
   // Global hospital resources & session
   selectedHospitalId: string;
+  districts: District[];
+  hospitals: Hospital[];
   beds: HospitalBed[];
   equipment: Equipment[];
   resourceRequests: ResourceRequest[];
@@ -45,19 +44,15 @@ interface AppContextType {
   logout: () => void;
   setUser: React.Dispatch<React.SetStateAction<UserProfile | null>>;
   // Resource lifecycle interactions
-  updateBedStatus: (bedId: string, newStatus: BedStatus, notes?: string) => void;
-  createResourceRequest: (req: Omit<ResourceRequest, 'id' | 'createdAt' | 'status' | 'hospitalId'>) => void;
-  updateRequestStatus: (requestId: string, status: ResourceRequest['status'], allocatedId?: string) => void;
-  updateEquipmentStatus: (equipmentId: string, status: Equipment['status']) => void;
-  bookAppointment: (department: string, doctorName: string, date: string, time: string) => void;
+  updateBedStatus: (bedId: string, newStatus: BedStatus, notes?: string) => Promise<void>;
+  createResourceRequest: (req: Omit<ResourceRequest, 'id' | 'createdAt' | 'status' | 'hospitalId'>) => Promise<void>;
+  updateRequestStatus: (requestId: string, status: ResourceRequest['status'], allocatedId?: string) => Promise<void>;
+  bookAppointment: (department: string, doctorName: string, date: string, time: string) => Promise<void>;
   markNotificationAsRead: (id: string) => void;
   resetDemoToScenario: () => void;
 }
 
 const STORAGE_KEY_USER = 'medisync_authenticated_account_v2';
-const STORAGE_KEY_BEDS = 'medisync_enterprise_beds_v2';
-const STORAGE_KEY_REQUESTS = 'medisync_enterprise_requests_v2';
-const STORAGE_KEY_NOTIFS = 'medisync_enterprise_notifs_v2';
 
 const initialEmptyOnboarding: TemporaryOnboardingState = {
   name: '',
@@ -72,33 +67,116 @@ const initialEmptyOnboarding: TemporaryOnboardingState = {
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Only persist fully completed user profiles or registered Google accounts
   const [user, setUser] = useState<UserProfile | null>(() => {
     try {
-      // Clear out any old legacy keys that contained broken onboarding steps
-      localStorage.removeItem('medisync_enterprise_user_v1');
       const saved = localStorage.getItem(STORAGE_KEY_USER);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        // Only keep if valid account object
-        if (parsed && parsed.email) {
-          return parsed;
-        }
-      }
-    } catch {
-      // fallback
-    }
+      if (saved) return JSON.parse(saved);
+    } catch {}
     return null;
   });
 
-  // Temporary In-Memory Onboarding State (NEVER persisted to localStorage!)
-  // Refreshes naturally reset this state to empty.
   const [tempOnboarding, setTempOnboarding] = useState<TemporaryOnboardingState>(() => ({
     ...initialEmptyOnboarding,
     name: user?.name || '',
     username: user?.username || '',
   }));
 
+  const [districts, setDistricts] = useState<District[]>([]);
+  const [hospitals, setHospitals] = useState<Hospital[]>([]);
+  const [beds, setBeds] = useState<HospitalBed[]>([]);
+  const [equipment, setEquipment] = useState<Equipment[]>([]);
+  const [resourceRequests, setResourceRequests] = useState<ResourceRequest[]>([]);
+  const [appointments, setAppointments] = useState<PatientAppointment[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+
+  const selectedHospitalId = user?.hospitalId || tempOnboarding.hospitalId || 'hosp-chn-01';
+  const socketRef = useRef<any>(null);
+
+  // Sync session
+  useEffect(() => {
+    if (user) {
+      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
+    } else {
+      localStorage.removeItem(STORAGE_KEY_USER);
+      setAuthToken(null);
+    }
+  }, [user]);
+
+  // Initial fetch of districts & hospitals from backend
+  useEffect(() => {
+    async function fetchMetadata() {
+      try {
+        const d = await api.getDistricts();
+        if (d) setDistricts(d);
+
+        const h = await api.getHospitals();
+        if (h) setHospitals(h);
+      } catch (err) {
+        console.warn('Backend connecting...', err);
+      }
+    }
+    fetchMetadata();
+  }, []);
+
+  // Fetch live dashboard data from Backend whenever user logs in or switches hospital
+  const fetchDashboardData = async () => {
+    if (!selectedHospitalId) return;
+    try {
+      const data = await api.getHospitalDashboard(selectedHospitalId);
+      if (data) {
+        if (data.beds) setBeds(data.beds);
+        if (data.equipment) setEquipment(data.equipment);
+        if (data.requests) setResourceRequests(data.requests);
+        if (data.appointments) setAppointments(data.appointments);
+        if (data.notifications) setNotifications(data.notifications);
+      }
+    } catch (err) {
+      console.warn('Dashboard fetch error:', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, [selectedHospitalId, user?.role, user?.isOnboarded]);
+
+  // Connect Socket.IO Realtime synchronization
+  useEffect(() => {
+    if (!selectedHospitalId) return;
+
+    socketRef.current = io('http://localhost:5000');
+    socketRef.current.emit('join_hospital', selectedHospitalId);
+
+    socketRef.current.on('bed_updated', (payload: any) => {
+      setBeds(prev => prev.map(b => b.id === payload.bedId ? { ...b, status: payload.newStatus, lastUpdated: payload.lastUpdated, notes: payload.notes } : b));
+      if (payload.notification) {
+        setNotifications(prev => [payload.notification, ...prev]);
+      }
+    });
+
+    socketRef.current.on('request_created', (payload: any) => {
+      if (payload.request) {
+        setResourceRequests(prev => [payload.request, ...prev]);
+      }
+      if (payload.notification) {
+        setNotifications(prev => [payload.notification, ...prev]);
+      }
+    });
+
+    socketRef.current.on('request_updated', (payload: any) => {
+      setResourceRequests(prev => prev.map(r => r.id === payload.requestId ? { ...r, status: payload.status, allocatedResourceId: payload.allocatedResourceId } : r));
+      if (payload.notification) {
+        setNotifications(prev => [payload.notification, ...prev]);
+      }
+    });
+
+    return () => {
+      if (socketRef.current) {
+        socketRef.current.disconnect();
+      }
+    };
+  }, [selectedHospitalId]);
+
+  // Temporary Onboarding Handlers
   const resetTempOnboarding = () => {
     setTempOnboarding({
       ...initialEmptyOnboarding,
@@ -107,28 +185,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  const updateTempProfile = (name: string, username: string) => {
-    setTempOnboarding(prev => ({
-      ...prev,
-      name,
-      username
-    }));
+  const updateTempProfile = async (name: string, username: string) => {
+    setTempOnboarding(prev => ({ ...prev, name, username }));
+    if (user) {
+      try {
+        const res = await api.updateProfile(name, username);
+        if (res && res.user) {
+          setUser(prev => prev ? { ...prev, name, username } : null);
+        }
+      } catch (err) {
+        console.warn('API updateProfile error:', err);
+      }
+    }
   };
 
   const updateTempDistrict = (districtId: string, districtName: string) => {
-    setTempOnboarding(prev => ({
-      ...prev,
-      districtId,
-      districtName
-    }));
+    setTempOnboarding(prev => ({ ...prev, districtId, districtName }));
   };
 
   const updateTempHospital = (hospitalId: string, hospitalName: string) => {
-    setTempOnboarding(prev => ({
-      ...prev,
-      hospitalId,
-      hospitalName
-    }));
+    setTempOnboarding(prev => ({ ...prev, hospitalId, hospitalName }));
   };
 
   const updateTempRole = (role: UserRole) => {
@@ -139,227 +215,151 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
   };
 
-  const clearTempRole = () => {
-    setTempOnboarding(prev => ({
-      ...prev,
-      role: null,
-      requestedAt: undefined
-    }));
-  };
+  const clearTempRole = () => setTempOnboarding(prev => ({ ...prev, role: null }));
+  const clearTempHospital = () => setTempOnboarding(prev => ({ ...prev, hospitalId: '', hospitalName: '', role: null }));
+  const clearTempDistrict = () => setTempOnboarding(prev => ({ ...prev, districtId: '', districtName: '', hospitalId: '', hospitalName: '', role: null }));
 
-  const clearTempHospital = () => {
-    setTempOnboarding(prev => ({
-      ...prev,
-      hospitalId: '',
-      hospitalName: '',
-      role: null,
-      requestedAt: undefined
-    }));
-  };
-
-  const clearTempDistrict = () => {
-    setTempOnboarding(prev => ({
-      ...prev,
-      districtId: '',
-      districtName: '',
-      hospitalId: '',
-      hospitalName: '',
-      role: null,
-      requestedAt: undefined
-    }));
-  };
-
-  const selectedHospitalId = user?.hospitalId || tempOnboarding.hospitalId || 'hosp-chn-01';
-
-  const [beds, setBeds] = useState<HospitalBed[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_BEDS);
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return INITIAL_BEDS;
-  });
-
-  const [equipment, setEquipment] = useState<Equipment[]>(INITIAL_EQUIPMENT);
-
-  const [resourceRequests, setResourceRequests] = useState<ResourceRequest[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_REQUESTS);
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return INITIAL_RESOURCE_REQUESTS;
-  });
-
-  const [appointments, setAppointments] = useState<PatientAppointment[]>(INITIAL_APPOINTMENTS);
-
-  const [notifications, setNotifications] = useState<NotificationItem[]>(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_NOTIFS);
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return INITIAL_NOTIFICATIONS;
-  });
-
-  // Only persist verified user profile
-  useEffect(() => {
-    if (user) {
-      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(user));
-    } else {
-      localStorage.removeItem(STORAGE_KEY_USER);
-    }
-  }, [user]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_BEDS, JSON.stringify(beds));
-  }, [beds]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_REQUESTS, JSON.stringify(resourceRequests));
-  }, [resourceRequests]);
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_NOTIFS, JSON.stringify(notifications));
-  }, [notifications]);
-
-  // Google OAuth sign-in
+  // Google Login backed by backend verification
   const loginWithGoogle = async (customEmail?: string, customName?: string): Promise<UserProfile> => {
     const email = customEmail || 'dr.sundar@medisync.gov.in';
     const name = customName || 'Dr. Sundaramoorthy M.';
-    const username = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_');
 
-    // Check if this account was previously onboarded and stored
-    let existingAccount: UserProfile | null = null;
     try {
-      const saved = localStorage.getItem(STORAGE_KEY_USER);
-      if (saved) {
-        const parsed: UserProfile = JSON.parse(saved);
-        if (parsed.email === email && parsed.isOnboarded) {
-          existingAccount = parsed;
-        }
+      const res = await api.loginWithGoogle(email, name);
+      if (res && res.token && res.user) {
+        setAuthToken(res.token);
+        setUser(res.user);
+        resetTempOnboarding();
+        return res.user;
       }
-    } catch {}
-
-    if (existingAccount) {
-      setUser(existingAccount);
-      return existingAccount;
+    } catch (err) {
+      console.warn('Backend login fallback:', err);
     }
 
-    // New or uncompleted user: create baseline identity WITHOUT completed onboarding!
-    const newUser: UserProfile = {
-      id: 'usr_' + Math.random().toString(36).substring(2, 9),
+    // Baseline fallback
+    const fallbackUser: UserProfile = {
+      id: 'usr_' + Date.now(),
       name,
-      username,
+      username: email.split('@')[0],
       email,
       avatarUrl: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=2563a6&textColor=ffffff`,
       roleVerificationStatus: 'none',
       isOnboarded: false
     };
-
-    setUser(newUser);
-    // Reset any temporary onboarding selections for fresh start
-    setTempOnboarding({
-      ...initialEmptyOnboarding,
-      name,
-      username
-    });
-
-    return newUser;
+    setUser(fallbackUser);
+    return fallbackUser;
   };
 
   const logout = () => {
     setUser(null);
+    setAuthToken(null);
     resetTempOnboarding();
     localStorage.removeItem(STORAGE_KEY_USER);
   };
 
-  // Called when role verification is formally approved and onboarding is finalized
-  const completeVerificationApproval = () => {
+  // Complete Role Verification via Backend API
+  const completeVerificationApproval = async () => {
     if (!user) return;
-    const completedUser: UserProfile = {
-      ...user,
-      name: tempOnboarding.name || user.name,
-      username: tempOnboarding.username || user.username,
-      districtId: tempOnboarding.districtId,
-      districtName: tempOnboarding.districtName,
-      hospitalId: tempOnboarding.hospitalId,
-      hospitalName: tempOnboarding.hospitalName,
-      role: tempOnboarding.role || user.role || 'doctor',
-      roleVerificationStatus: 'approved',
-      approvedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      isOnboarded: true
-    };
-    setUser(completedUser);
+    try {
+      const res = await api.requestRole(
+        tempOnboarding.districtId || user.districtId || 'chennai',
+        tempOnboarding.hospitalId || user.hospitalId || 'hosp-chn-01',
+        tempOnboarding.role || user.role || 'doctor'
+      );
+      if (res && res.user) {
+        if (res.token) setAuthToken(res.token);
+        setUser({ ...res.user, isOnboarded: true, roleVerificationStatus: 'approved' });
+      }
+    } catch (err) {
+      console.warn('API completeVerificationApproval error:', err);
+      setUser(prev => prev ? {
+        ...prev,
+        districtId: tempOnboarding.districtId,
+        districtName: tempOnboarding.districtName,
+        hospitalId: tempOnboarding.hospitalId,
+        hospitalName: tempOnboarding.hospitalName,
+        role: tempOnboarding.role || 'doctor',
+        roleVerificationStatus: 'approved',
+        isOnboarded: true
+      } : null);
+    }
+    fetchDashboardData();
   };
 
-  const simulateAdminDecision = (decision: 'approved' | 'rejected', reason?: string) => {
+  const simulateAdminDecision = async (decision: 'approved' | 'rejected', reason?: string) => {
     if (!user) return;
     if (decision === 'approved') {
-      completeVerificationApproval();
+      await completeVerificationApproval();
     } else {
-      setUser({
-        ...user,
-        role: tempOnboarding.role || user.role,
+      try {
+        await api.verifyStaffDecision(user.id, 'rejected', reason);
+      } catch {}
+      setUser(prev => prev ? {
+        ...prev,
         roleVerificationStatus: 'rejected',
-        rejectionReason: reason || 'Medical council registration ID verification failed or hospital affiliation could not be established.',
+        rejectionReason: reason || 'Medical credentials could not be established',
         isOnboarded: false
-      });
+      } : null);
     }
   };
 
-  const requestRoleApproval = () => {
+  const requestRoleApproval = async () => {
     if (!user) return;
-    setUser({
-      ...user,
-      role: tempOnboarding.role || user.role,
-      roleVerificationStatus: 'pending',
-      requestedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      rejectionReason: undefined,
-      isOnboarded: false
-    });
+    try {
+      const res = await api.requestRole(
+        tempOnboarding.districtId || 'chennai',
+        tempOnboarding.hospitalId || 'hosp-chn-01',
+        tempOnboarding.role || 'doctor'
+      );
+      if (res && res.user) {
+        setUser(res.user);
+      }
+    } catch {}
   };
 
-  // Resource & bed updates
-  const updateBedStatus = (bedId: string, newStatus: BedStatus, notes?: string) => {
-    setBeds(prev => prev.map(b => b.id === bedId ? { ...b, status: newStatus, lastUpdated: 'Just now', notes: notes ?? b.notes } : b));
+  // Live Resource Updates via REST API & Socket.IO
+  const updateBedStatus = async (bedId: string, newStatus: BedStatus, notes?: string) => {
+    try {
+      await api.updateBedStatus(bedId, newStatus, notes);
+    } catch (err) {
+      console.warn('API updateBedStatus error:', err);
+    }
   };
 
-  const createResourceRequest = (req: Omit<ResourceRequest, 'id' | 'createdAt' | 'status' | 'hospitalId'>) => {
-    const currentHospId = user?.hospitalId || selectedHospitalId;
-    const newReq: ResourceRequest = {
-      ...req,
-      id: 'req-' + Math.floor(100 + Math.random() * 900),
-      hospitalId: currentHospId,
-      status: 'pending',
-      createdAt: 'Just now'
-    };
-    setResourceRequests(prev => [newReq, ...prev]);
+  const createResourceRequest = async (req: Omit<ResourceRequest, 'id' | 'createdAt' | 'status' | 'hospitalId'>) => {
+    try {
+      await api.createRequest({
+        ...req,
+        hospitalId: selectedHospitalId
+      });
+    } catch (err) {
+      console.warn('API createResourceRequest error:', err);
+    }
   };
 
-  const updateRequestStatus = (requestId: string, status: ResourceRequest['status'], allocatedId?: string) => {
-    setResourceRequests(prev => prev.map(r => r.id === requestId ? { ...r, status, allocatedResourceId: allocatedId || r.allocatedResourceId, reviewedAt: 'Just now' } : r));
+  const updateRequestStatus = async (requestId: string, status: ResourceRequest['status'], allocatedId?: string) => {
+    try {
+      await api.updateRequestStatus(requestId, status, allocatedId);
+    } catch (err) {
+      console.warn('API updateRequestStatus error:', err);
+    }
   };
 
-  const updateEquipmentStatus = (equipmentId: string, status: Equipment['status']) => {
-    setEquipment(prev => prev.map(eq => eq.id === equipmentId ? { ...eq, status, lastInspection: 'Just now' } : eq));
-  };
-
-  const bookAppointment = (department: string, doctorName: string, date: string, time: string) => {
-    if (!user) return;
-    const newApt: PatientAppointment = {
-      id: 'apt-' + Math.floor(100 + Math.random() * 900),
-      patientId: user.id,
-      patientName: user.name,
-      hospitalId: selectedHospitalId,
-      hospitalName: user.hospitalName || 'Rajiv Gandhi Government General Hospital (RGGGH)',
-      department,
-      doctorName,
-      date,
-      time,
-      tokenNumber: Math.floor(15 + Math.random() * 20),
-      status: 'In Queue',
-      queuePosition: 4,
-      estimatedWaitMinutes: 30
-    };
-    setAppointments(prev => [newApt, ...prev]);
+  const bookAppointment = async (department: string, doctorName: string, date: string, time: string) => {
+    try {
+      const res = await api.bookAppointment({
+        hospitalId: selectedHospitalId,
+        department,
+        doctorName,
+        date,
+        time
+      });
+      if (res && res.appointment) {
+        setAppointments(prev => [res.appointment, ...prev]);
+      }
+    } catch (err) {
+      console.warn('API bookAppointment error:', err);
+    }
   };
 
   const markNotificationAsRead = (id: string) => {
@@ -367,11 +367,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const resetDemoToScenario = () => {
-    setBeds(INITIAL_BEDS);
-    setEquipment(INITIAL_EQUIPMENT);
-    setResourceRequests(INITIAL_RESOURCE_REQUESTS);
-    setNotifications(INITIAL_NOTIFICATIONS);
-    setAppointments(INITIAL_APPOINTMENTS);
+    fetchDashboardData();
   };
 
   return (
@@ -391,6 +387,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         simulateAdminDecision,
         requestRoleApproval,
         selectedHospitalId,
+        districts,
+        hospitals,
         beds,
         equipment,
         resourceRequests,
@@ -402,7 +400,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateBedStatus,
         createResourceRequest,
         updateRequestStatus,
-        updateEquipmentStatus,
         bookAppointment,
         markNotificationAsRead,
         resetDemoToScenario,

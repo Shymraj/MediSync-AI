@@ -27,8 +27,7 @@ export const AdminDashboard: React.FC<{ activeTab: string }> = ({ activeTab }) =
     equipment, 
     resourceRequests, 
     updateRequestStatus, 
-    updateBedStatus,
-    updateEquipmentStatus 
+    updateBedStatus 
   } = useApp();
 
   const [selectedRequestToAllocate, setSelectedRequestToAllocate] = useState<string | null>(null);
@@ -58,7 +57,6 @@ export const AdminDashboard: React.FC<{ activeTab: string }> = ({ activeTab }) =
     } else {
       const availEq = equipment.find(e => e.status === 'Available');
       if (availEq) {
-        updateEquipmentStatus(availEq.id, 'In Use');
         updateRequestStatus(reqId, 'allocated', availEq.id);
       } else {
         updateRequestStatus(reqId, 'approved');
@@ -313,12 +311,7 @@ export const AdminDashboard: React.FC<{ activeTab: string }> = ({ activeTab }) =
                   </div>
                   <div className="mt-2 flex items-center justify-between text-[10px] text-slate-400">
                     <span>Inspected: {eq.lastInspection}</span>
-                    <button 
-                      onClick={() => updateEquipmentStatus(eq.id, eq.status === 'Available' ? 'In Use' : 'Available')}
-                      className="text-[#2563A6] font-semibold hover:underline cursor-pointer"
-                    >
-                      Toggle Status
-                    </button>
+                    <span className="text-slate-400 font-medium">Telemetry Online</span>
                   </div>
                 </div>
               ))}
