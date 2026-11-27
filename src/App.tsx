@@ -17,9 +17,11 @@ import { DoctorDashboard } from './components/dashboards/DoctorDashboard';
 import { NurseDashboard } from './components/dashboards/NurseDashboard';
 import { PatientDashboard } from './components/dashboards/PatientDashboard';
 import { MediSyncAdminLogin, MediSyncAdminDashboard } from './medisync-admin';
+import { PatientLoginPage } from './components/patient/PatientLoginPage';
+import { PatientPortalDashboard } from './components/patient-dashboard';
 
 export const AppContent: React.FC = () => {
-  const { user, tempOnboarding, resetTempOnboarding, completeVerificationApproval } = useApp();
+  const { user, tempOnboarding, resetTempOnboarding, completeVerificationApproval, logout } = useApp();
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
 
@@ -164,39 +166,48 @@ export const AppContent: React.FC = () => {
 
   // 3. AUTHENTICATION ROUTE (Hospital Staff or Patient Portal):
   if (isAuthRoute) {
+    // Dedicated Patient Portal Login matching user's custom design (Google login + Email)
+    if (activeAuthPortal === 'patient' || currentPath === '/auth/patient' || currentPath.includes('patient')) {
+      return (
+        <PatientLoginPage
+          onBack={() => navigateTo('/portal-select')}
+          onSuccess={() => navigateTo('/dashboard/patient')}
+        />
+      );
+    }
+
     return (
       <AuthPage
         portal={activeAuthPortal}
         onBack={() => navigateTo('/portal-select')}
         onSuccess={() => {
-          // Patients ONLY login -> directly into Patient Dashboard!
-          if (activeAuthPortal === 'patient') {
-            navigateTo('/dashboard/patient');
-          } else {
-            // Hospital Registration: Google verify panitu antha 5 flows varanum!
-            // Step 1: /profile -> Step 2: /district -> Step 3: /hospital -> Step 4: /role -> Step 5: /verification
-            resetTempOnboarding();
-            navigateTo('/profile');
-          }
+          // Hospital Registration: Google verify panitu antha 5 flows varanum!
+          // Step 1: /profile -> Step 2: /district -> Step 3: /hospital -> Step 4: /role -> Step 5: /verification
+          resetTempOnboarding();
+          navigateTo('/profile');
         }}
       />
     );
   }
 
-
   // 3. ROUTE GUARDS:
   // If not authenticated at all and trying to access internal routes, guide to auth
   if (!user) {
+    if (activeAuthPortal === 'patient' || currentPath.includes('patient')) {
+      return (
+        <PatientLoginPage
+          onBack={() => navigateTo('/portal-select')}
+          onSuccess={() => navigateTo('/dashboard/patient')}
+        />
+      );
+    }
+
     return (
       <AuthPage
         portal={activeAuthPortal}
         onBack={() => navigateTo('/')}
         onSuccess={() => {
-          if (activeAuthPortal === 'patient') {
-            navigateTo('/dashboard/patient');
-          } else {
-            navigateTo('/profile');
-          }
+          navigateTo('/profile');
         }}
       />
     );
@@ -279,6 +290,23 @@ export const AppContent: React.FC = () => {
           const targetRole = user?.role || tempOnboarding.role || 'admin';
           navigateTo(`/dashboard/${targetRole}`);
         }}
+      />
+    );
+  }
+
+  // Dedicated Patient Care Dashboard Route (Find out Hospital, OPD Tokens, Emergency SOS)
+  if (
+    currentPath === '/patient-dashboard' ||
+    currentPath === '/dashboard/patient' ||
+    (user && (user as any).role === 'patient' && (currentPath.startsWith('/dashboard') || currentPath === '/patient-dashboard'))
+  ) {
+    return (
+      <PatientPortalDashboard
+        onLogout={() => {
+          logout();
+          navigateTo('/portal-select');
+        }}
+        onBackHome={() => navigateTo('/')}
       />
     );
   }

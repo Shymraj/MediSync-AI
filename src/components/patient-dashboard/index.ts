@@ -1,0 +1,1 @@
+export { PatientPortalDashboard } from './PatientPortalDashboard';

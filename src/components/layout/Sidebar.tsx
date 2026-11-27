@@ -68,7 +68,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
     { id: 'queue', label: 'OPD Queue Status', icon: <Clock className="w-4 h-4" /> },
     { id: 'requests', label: 'My Service Requests', icon: <ClipboardList className="w-4 h-4" /> },
     { id: 'hospital', label: 'Hospital Information', icon: <Building2 className="w-4 h-4" /> },
-    { id: 'profile', label: 'Patient Record', icon: <Users className="w-4 h-4" /> }
+    { id: 'profile', label: 'Patient Record', icon: <Users className="w-4 h-4" /> },
+    { id: 'find_hospitals', label: 'Find Hospitals (தேடல்)', icon: <MapPin className="w-4 h-4" /> }
   ];
 
   const hospitalNav = [

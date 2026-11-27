@@ -10,7 +10,8 @@ import {
   FileText, 
   PhoneCall,
   Activity,
-  ShieldCheck
+  ShieldCheck,
+  ArrowLeft
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Card } from '../common/Card';
@@ -18,8 +19,19 @@ import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
 import { HOSPITALS } from '../../data/mockData';
+import { Hospital } from '../../types';
 
-export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab }) => {
+export interface PatientDashboardProps {
+  activeTab?: string;
+  selectedHospital?: Hospital;
+  onBack?: () => void;
+}
+
+export const PatientDashboard: React.FC<PatientDashboardProps> = ({ 
+  activeTab = 'overview',
+  selectedHospital,
+  onBack
+}) => {
   const { user, appointments, bookAppointment, beds, equipment } = useApp();
   const [isBookModalOpen, setIsBookModalOpen] = useState(false);
   const [department, setDepartment] = useState('Cardiology OPD');
@@ -27,7 +39,7 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
   const [date, setDate] = useState('2026-11-28');
   const [time, setTime] = useState('11:00 AM');
 
-  const currentHospital = HOSPITALS.find(h => h.id === (user?.hospitalId || 'hosp-chn-01')) || HOSPITALS[0];
+  const currentHospital = selectedHospital || HOSPITALS.find(h => h.id === (user?.hospitalId || 'hosp-chn-01')) || HOSPITALS[0];
 
   // Specific isolation: patients only see their own appointments
   const myAppointments = appointments.filter(a => a.patientId === user?.id || a.patientName === user?.name || a.patientId === 'usr-patient-demo');
@@ -39,23 +51,46 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
   };
 
   // Aggregated resource transparency for patient confidence
-  const readyBedsCount = beds.filter(b => b.status === 'ready').length;
-  const occupiedBedsCount = beds.filter(b => b.status === 'occupied').length;
-  const inPrepBedsCount = beds.filter(b => ['cleaning', 'equipment_check', 'nurse_confirmation'].includes(b.status)).length;
+  const readyBedsCount = currentHospital?.readyBeds ?? beds.filter(b => b.status === 'ready').length;
+  const occupiedBedsCount = currentHospital?.occupiedBeds ?? beds.filter(b => b.status === 'occupied').length;
+  const inPrepBedsCount = currentHospital?.prepBeds ?? beds.filter(b => ['cleaning', 'equipment_check', 'nurse_confirmation'].includes(b.status)).length;
+  const icuBedsCount = currentHospital?.icuAvailable ?? 14;
+  const ventilatorsCount = currentHospital?.ventilatorsAvailable ?? 9;
 
   return (
     <div className="space-y-6">
+      
+      {/* Back Button to Hospital Search */}
+      {onBack && (
+        <div className="flex items-center justify-between pb-1">
+          <button
+            onClick={onBack}
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-200 hover:bg-blue-50/70 hover:border-blue-300 text-slate-700 hover:text-[#1A56DB] text-xs font-bold transition-all shadow-2xs cursor-pointer group"
+          >
+            <ArrowLeft className="w-4 h-4 text-[#1A56DB] group-hover:-translate-x-1 transition-transform" />
+            <span>&larr; Back to Hospital Search (மருத்துவமனை பட்டியல்)</span>
+          </button>
+
+          <div className="text-xs text-slate-500 font-medium hidden sm:block">
+            Selected Facility: <strong className="text-slate-800">{currentHospital.name}</strong>
+          </div>
+        </div>
+      )}
+
       {/* Patient Hospital Banner */}
       <div className="p-5 bg-white border border-[#E2E8F0] rounded-xl flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-2xs">
         <div>
-          <div className="flex items-center gap-2">
-            <h2 className="text-base font-bold text-[#1E293B]">{currentHospital.name}</h2>
-            <Badge variant="primary" size="sm">Your Selected Facility</Badge>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h2 className="text-base sm:text-lg font-bold text-[#1E293B]">{currentHospital.name}</h2>
+            <Badge variant="primary" size="sm">Active Facility</Badge>
+            <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-blue-50 text-[#1A56DB] border border-blue-100">
+              {currentHospital.type || 'Government Medical Facility'}
+            </span>
           </div>
-          <p className="text-xs text-[#64748B] mt-1 flex items-center gap-2">
-            <span>Location: {currentHospital.location}</span>
+          <p className="text-xs text-[#64748B] mt-1.5 flex items-center gap-2 flex-wrap font-medium">
+            <span>Location: {currentHospital.location} &middot; {currentHospital.districtName}</span>
             <span>&middot;</span>
-            <span>Helpline: {currentHospital.emergencyContact}</span>
+            <span className="text-rose-600 font-bold">24x7 Helpline: {currentHospital.emergencyContact}</span>
           </p>
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -76,16 +111,21 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
         subtitle="Transparent availability information &middot; Last updated: Just now"
         noPadding
       >
-        <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-4 border-b border-[#E2E8F0] bg-[#F8FAFC]">
+        <div className="p-4 grid grid-cols-2 sm:grid-cols-4 gap-4 border-b border-[#E2E8F0] bg-[#F8FAFC]">
           <div className="p-3 bg-white rounded-lg border border-[#E2E8F0]">
             <div className="text-[11px] text-[#64748B] font-medium">Ready for Admission</div>
             <div className="text-xl font-bold text-[#15803D] mt-1">{readyBedsCount} Beds</div>
             <div className="text-[10px] text-[#64748B] mt-0.5">Sanitized & nurse confirmed</div>
           </div>
           <div className="p-3 bg-white rounded-lg border border-[#E2E8F0]">
-            <div className="text-[11px] text-[#64748B] font-medium">Preparation in Progress</div>
-            <div className="text-xl font-bold text-[#D97706] mt-1">{inPrepBedsCount} Beds</div>
-            <div className="text-[10px] text-[#64748B] mt-0.5">Sanitization & calibration underway</div>
+            <div className="text-[11px] text-[#64748B] font-medium">ICU Beds Available</div>
+            <div className="text-xl font-bold text-[#0284C7] mt-1">{icuBedsCount} Beds</div>
+            <div className="text-[10px] text-[#64748B] mt-0.5">Critical care bays ready</div>
+          </div>
+          <div className="p-3 bg-white rounded-lg border border-[#E2E8F0]">
+            <div className="text-[11px] text-[#64748B] font-medium">Ventilators Ready</div>
+            <div className="text-xl font-bold text-cyan-700 mt-1">{ventilatorsCount} Units</div>
+            <div className="text-[10px] text-[#64748B] mt-0.5">Calibrated mechanical units</div>
           </div>
           <div className="p-3 bg-white rounded-lg border border-[#E2E8F0]">
             <div className="text-[11px] text-[#64748B] font-medium">Currently Occupied</div>
@@ -134,7 +174,7 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
                         Doctor: <span className="font-semibold text-[#1E293B]">{apt.doctorName}</span> &middot; Date: {apt.date} at {apt.time}
                       </div>
                       <div className="text-[11px] text-slate-500 mt-1">
-                        Facility: {apt.hospitalName}
+                        Facility: {apt.hospitalName || currentHospital.name}
                       </div>
                     </div>
 
@@ -162,7 +202,11 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
                 <div className="font-bold flex items-center gap-1.5">
                   <PhoneCall className="w-4 h-4" /> 24/7 Emergency Casualty Desk
                 </div>
-                <div className="text-sm font-black mt-1">{currentHospital.emergencyContact}</div>
+                <div className="text-sm font-black mt-1">
+                  <a href={`tel:${currentHospital.emergencyContact}`} className="hover:underline">
+                    {currentHospital.emergencyContact}
+                  </a>
+                </div>
               </div>
 
               <div className="p-3 bg-slate-50 border border-[#E2E8F0] rounded-lg text-[#1E293B]">
@@ -184,7 +228,7 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
         isOpen={isBookModalOpen}
         onClose={() => setIsBookModalOpen(false)}
         title="Schedule OPD Consultation"
-        description="Book a slot at Rajiv Gandhi Government General Hospital (RGGGH)"
+        description={`Book a slot at ${currentHospital.name}`}
       >
         <form onSubmit={handleBookSubmit} className="space-y-4">
           <div>
@@ -192,13 +236,14 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
             <select
               value={department}
               onChange={(e) => setDepartment(e.target.value)}
-              className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6] bg-white"
+              className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6] bg-white font-medium"
             >
               <option value="Cardiology OPD">Cardiology OPD</option>
               <option value="Pulmonology Consultation">Pulmonology Consultation</option>
               <option value="General Medicine">General Medicine</option>
               <option value="Neurology Consultation">Neurology Consultation</option>
               <option value="Pediatrics OPD">Pediatrics OPD</option>
+              <option value="Emergency & Trauma">Emergency & Trauma Bay</option>
             </select>
           </div>
 
@@ -207,7 +252,7 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
             <select
               value={doctorName}
               onChange={(e) => setDoctorName(e.target.value)}
-              className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6] bg-white"
+              className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6] bg-white font-medium"
             >
               <option value="Dr. Sundaramoorthy M.">Dr. Sundaramoorthy M. (Critical Care & Cardiology)</option>
               <option value="Dr. Meenakshi S.">Dr. Meenakshi S. (Pulmonology Specialist)</option>
@@ -222,7 +267,7 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
-                className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6]"
+                className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6] font-medium"
               />
             </div>
             <div>
@@ -230,7 +275,7 @@ export const PatientDashboard: React.FC<{ activeTab: string }> = ({ activeTab })
               <select
                 value={time}
                 onChange={(e) => setTime(e.target.value)}
-                className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6] bg-white"
+                className="w-full text-xs px-3 py-2 border border-[#CBD5E1] rounded-lg focus:outline-none focus:ring-2 focus:ring-[#2563A6] bg-white font-medium"
               >
                 <option value="09:30 AM">09:30 AM</option>
                 <option value="11:00 AM">11:00 AM</option>
