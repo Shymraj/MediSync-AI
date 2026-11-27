@@ -35,21 +35,20 @@ export const RoleVerificationPage: React.FC<RoleVerificationPageProps> = ({
 
   const handleSimulateApprove = async () => {
     setIsProcessing(true);
-    await new Promise(r => setTimeout(r, 600));
-    simulateAdminDecision('approved');
+    await simulateAdminDecision('approved');
     setIsProcessing(false);
   };
 
   const handleSimulateReject = async () => {
     setIsProcessing(true);
-    await new Promise(r => setTimeout(r, 600));
-    simulateAdminDecision('rejected', 'Institutional employee ID not found in Government Medical College Hospital registry.');
+    await simulateAdminDecision('rejected', 'Institutional employee ID not found in Government Medical College Hospital registry.');
     setIsProcessing(false);
   };
 
-  const handleLaunchDashboard = () => {
-    // Finalize onboarding approval and move to dashboard
-    simulateAdminDecision('approved');
+  const handleLaunchDashboard = async () => {
+    setIsProcessing(true);
+    await simulateAdminDecision('approved');
+    setIsProcessing(false);
     onApproved();
   };
 
@@ -186,6 +185,7 @@ export const RoleVerificationPage: React.FC<RoleVerificationPageProps> = ({
                   variant="primary" 
                   size="lg" 
                   onClick={handleLaunchDashboard} 
+                  isLoading={isProcessing}
                   icon={<ArrowRight className="w-4 h-4" />}
                   className="w-full"
                 >

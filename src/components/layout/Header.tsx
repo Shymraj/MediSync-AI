@@ -17,15 +17,17 @@ import { Button } from '../common/Button';
 interface HeaderProps {
   title: string;
   subtitle?: string;
+  activeRole?: string;
   children?: React.ReactNode;
   onNavigateHome?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ title, subtitle, onNavigateHome }) => {
+export const Header: React.FC<HeaderProps> = ({ title, subtitle, activeRole, onNavigateHome }) => {
   const { user, logout, notifications, markNotificationAsRead, resetDemoToScenario, setUser } = useApp();
   const [showNotifs, setShowNotifs] = useState(false);
   const [showRoleSwitcher, setShowRoleSwitcher] = useState(false);
 
+  const displayRole = activeRole || user?.role || 'admin';
   const unreadCount = notifications.filter(n => !n.read).length;
 
   const handleRoleQuickSwitch = (newRole: 'admin' | 'doctor' | 'nurse' | 'patient') => {
@@ -37,6 +39,7 @@ export const Header: React.FC<HeaderProps> = ({ title, subtitle, onNavigateHome 
         isOnboarded: true
       });
       setShowRoleSwitcher(false);
+      window.location.hash = `#/dashboard/${newRole}`;
     }
   };
 
@@ -64,7 +67,7 @@ export const Header: React.FC<HeaderProps> = ({ title, subtitle, onNavigateHome 
           )}
           <h1 className="text-base font-bold text-[#1E293B]">{title}</h1>
           <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-50 text-[#2563A6] border border-blue-200">
-            {user?.role} portal
+            {displayRole} portal
           </span>
         </div>
         {subtitle && <p className="text-xs text-[#64748B] mt-0.5">{subtitle}</p>}

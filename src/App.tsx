@@ -84,7 +84,7 @@ export const AppContent: React.FC = () => {
             navigateTo('/auth');
           } else if (user.isOnboarded && user.roleVerificationStatus === 'approved') {
             // Completed approved returning user -> assigned dashboard directly
-            navigateTo('/dashboard');
+            navigateTo(`/dashboard/${user.role || 'admin'}`);
           } else if (user.roleVerificationStatus === 'pending') {
             // Pending returning user -> Access Pending
             navigateTo('/verification');
@@ -106,7 +106,7 @@ export const AppContent: React.FC = () => {
         onSuccess={() => {
           // Returning approved user:
           if (user?.isOnboarded && user?.roleVerificationStatus === 'approved') {
-            navigateTo('/dashboard');
+            navigateTo(`/dashboard/${user?.role || 'admin'}`);
           } else if (user?.roleVerificationStatus === 'pending') {
             navigateTo('/verification');
           } else {
@@ -191,19 +191,19 @@ export const AppContent: React.FC = () => {
   if (isLoadingDashboard) {
     return (
       <DashboardLoading
-        roleName={tempOnboarding.role || user.role || 'Staff'}
-        hospitalName={tempOnboarding.hospitalName || user.hospitalName || 'Institutional Hospital'}
+        roleName={user?.role || tempOnboarding.role || 'Staff'}
+        hospitalName={user?.hospitalName || tempOnboarding.hospitalName || 'Institutional Hospital'}
         onFinished={() => {
           setIsLoadingDashboard(false);
-          completeVerificationApproval();
-          navigateTo('/dashboard');
+          const targetRole = user?.role || tempOnboarding.role || 'admin';
+          navigateTo(`/dashboard/${targetRole}`);
         }}
       />
     );
   }
 
-  // Step 7: Role-Based Dashboard
-  if (currentPath === '/dashboard') {
+  // Step 7: Role-Based Dashboard (handles /dashboard and /dashboard/:role)
+  if (currentPath === '/dashboard' || currentPath.startsWith('/dashboard/')) {
     // Check if user is approved for dashboard access
     if (!user.isOnboarded || user.roleVerificationStatus !== 'approved') {
       // Prevent unauthorized dashboard access
@@ -218,8 +218,15 @@ export const AppContent: React.FC = () => {
       );
     }
 
+    // Determine target role from URL or user profile
+    const pathParts = currentPath.split('/');
+    const urlRole = pathParts[2] as any;
+    const activeRole: any = (urlRole && ['admin', 'doctor', 'nurse', 'patient'].includes(urlRole))
+      ? urlRole
+      : (user.role || 'admin');
+
     const renderDashboardByRole = () => {
-      switch (user.role) {
+      switch (activeRole) {
         case 'admin':
           return <AdminDashboard activeTab={currentTab} />;
         case 'doctor':
@@ -234,7 +241,7 @@ export const AppContent: React.FC = () => {
     };
 
     const getDashboardSubtitle = () => {
-      switch (user.role) {
+      switch (activeRole) {
         case 'admin':
           return 'Hospital command center — Live bed control, staff authorization, and equipment allocation';
         case 'doctor':
@@ -251,17 +258,22 @@ export const AppContent: React.FC = () => {
     return (
       <div className="min-h-screen bg-[#F5F7FA] flex text-[#1E293B]">
         {/* Fixed Left Sidebar */}
-        <Sidebar currentTab={currentTab} onSelectTab={(tab) => setCurrentTab(tab)} />
+        <Sidebar 
+          currentTab={currentTab} 
+          onSelectTab={(tab) => setCurrentTab(tab)} 
+          activeRole={activeRole}
+        />
 
         {/* Main Layout */}
         <div className="flex-1 flex flex-col min-w-0">
           <Header 
             title={
               currentTab === 'dashboard' 
-                ? `${user.role ? user.role.toUpperCase() : 'COMMAND'} OVERVIEW` 
+                ? `${activeRole.toUpperCase()} OVERVIEW` 
                 : currentTab.toUpperCase()
             } 
             subtitle={getDashboardSubtitle()} 
+            activeRole={activeRole}
             onNavigateHome={() => navigateTo('/')}
           />
           <main className="flex-1 p-6 overflow-y-auto">

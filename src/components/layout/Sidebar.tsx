@@ -22,11 +22,12 @@ import { UserRole } from '../../types';
 interface SidebarProps {
   currentTab: string;
   onSelectTab: (tabId: string) => void;
+  activeRole?: UserRole;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab }) => {
+export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activeRole }) => {
   const { user } = useApp();
-  const role: UserRole = user?.role || 'admin';
+  const role: UserRole = activeRole || user?.role || 'admin';
 
   // Specific role navigation items as defined in spec
   const adminNav = [

@@ -28,7 +28,7 @@ interface AppContextType {
   clearTempHospital: () => void;
   clearTempDistrict: () => void;
   // Finalizing Onboarding via Backend API
-  completeVerificationApproval: () => Promise<void>;
+  completeVerificationApproval: (targetRole?: UserRole) => Promise<void>;
   simulateAdminDecision: (decision: 'approved' | 'rejected', reason?: string) => Promise<void>;
   requestRoleApproval: () => Promise<void>;
   // Global hospital resources & session
@@ -258,30 +258,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Complete Role Verification via Backend API
-  const completeVerificationApproval = async () => {
+  const completeVerificationApproval = async (targetRole?: UserRole) => {
     if (!user) return;
+    const finalRole: UserRole = targetRole || tempOnboarding.role || user.role || 'admin';
+    const finalDistrictId = tempOnboarding.districtId || user.districtId || 'chennai';
+    const finalDistrictName = tempOnboarding.districtName || user.districtName || 'Chennai';
+    const finalHospitalId = tempOnboarding.hospitalId || user.hospitalId || 'hosp-chn-01';
+    const finalHospitalName = tempOnboarding.hospitalName || user.hospitalName || 'Rajiv Gandhi Government General Hospital';
+
+    // Synchronously commit to local state & storage first to eliminate navigation race conditions
+    const updatedUser: UserProfile = {
+      ...user,
+      districtId: finalDistrictId,
+      districtName: finalDistrictName,
+      hospitalId: finalHospitalId,
+      hospitalName: finalHospitalName,
+      role: finalRole,
+      roleVerificationStatus: 'approved',
+      isOnboarded: true
+    };
+    setUser(updatedUser);
+    localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updatedUser));
+
     try {
-      const res = await api.requestRole(
-        tempOnboarding.districtId || user.districtId || 'chennai',
-        tempOnboarding.hospitalId || user.hospitalId || 'hosp-chn-01',
-        tempOnboarding.role || user.role || 'doctor'
-      );
+      const res = await api.requestRole(finalDistrictId, finalHospitalId, finalRole);
       if (res && res.user) {
         if (res.token) setAuthToken(res.token);
-        setUser({ ...res.user, isOnboarded: true, roleVerificationStatus: 'approved' });
+        if (finalRole !== 'patient') {
+          await api.verifyStaffDecision(res.user.id, 'approved');
+        }
+        setUser({
+          ...res.user,
+          districtName: finalDistrictName,
+          hospitalName: finalHospitalName,
+          role: finalRole,
+          roleVerificationStatus: 'approved',
+          isOnboarded: true
+        });
       }
     } catch (err) {
       console.warn('API completeVerificationApproval error:', err);
-      setUser(prev => prev ? {
-        ...prev,
-        districtId: tempOnboarding.districtId,
-        districtName: tempOnboarding.districtName,
-        hospitalId: tempOnboarding.hospitalId,
-        hospitalName: tempOnboarding.hospitalName,
-        role: tempOnboarding.role || 'doctor',
-        roleVerificationStatus: 'approved',
-        isOnboarded: true
-      } : null);
     }
     fetchDashboardData();
   };
@@ -294,12 +310,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       try {
         await api.verifyStaffDecision(user.id, 'rejected', reason);
       } catch {}
-      setUser(prev => prev ? {
-        ...prev,
+      const updatedUser: UserProfile = {
+        ...user,
         roleVerificationStatus: 'rejected',
         rejectionReason: reason || 'Medical credentials could not be established',
         isOnboarded: false
-      } : null);
+      };
+      setUser(updatedUser);
+      localStorage.setItem(STORAGE_KEY_USER, JSON.stringify(updatedUser));
     }
   };
 
