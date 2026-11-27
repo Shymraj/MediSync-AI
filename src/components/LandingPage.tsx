@@ -28,16 +28,32 @@ import {
   Check
 } from 'lucide-react';
 import { Button } from './common/Button';
+import { PortalSelectionModal } from './PortalSelectionModal';
 
-interface LandingPageProps {
+export interface LandingPageProps {
   onGetStarted: () => void;
+  onSelectPortal?: (portal: 'hospital' | 'patient') => void;
 }
 
-export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
+export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onSelectPortal }) => {
   const [activeNav, setActiveNav] = useState('Home');
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isDemoModalOpen, setIsDemoModalOpen] = useState(false);
+  const [isPortalModalOpen, setIsPortalModalOpen] = useState(false);
+
+  const handleOpenPortalSelection = () => {
+    setIsPortalModalOpen(true);
+  };
+
+  const handlePortalSelected = (portal: 'hospital' | 'patient') => {
+    setIsPortalModalOpen(false);
+    if (onSelectPortal) {
+      onSelectPortal(portal);
+    } else {
+      onGetStarted();
+    }
+  };
 
   // Contact Form State
   const [contactName, setContactName] = useState('');
@@ -141,8 +157,17 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
             })}
           </nav>
 
-          {/* Right Actions: Search Icon + Get Started Button */}
-          <div className="flex items-center gap-3">
+          {/* Right Actions: Search Icon + Admin Login + Get Started Button */}
+          <div className="flex items-center gap-2.5">
+            <a
+              href="#/admin-login"
+              className="px-3.5 py-1.5 rounded-full text-xs font-semibold text-slate-700 hover:text-[#1A56DB] hover:bg-blue-50 border border-slate-300 transition-colors hidden sm:inline-flex items-center gap-1.5 cursor-pointer shadow-2xs"
+              title="MediSync Super Admin Platform Login"
+            >
+              <ShieldCheck className="w-3.5 h-3.5 text-[#1A56DB]" />
+              <span>Admin Login</span>
+            </a>
+
             <button
               onClick={() => setIsSearchOpen(true)}
               className="w-9 h-9 rounded-full bg-white border border-[#CBD5E1] text-[#64748B] hover:text-[#0F172A] hover:border-slate-400 flex items-center justify-center transition-colors shadow-2xs cursor-pointer"
@@ -1096,7 +1121,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
                 <Button 
                   variant="primary" 
                   size="sm" 
-                  onClick={() => { setIsDemoModalOpen(false); onGetStarted(); }}
+                  onClick={() => { setIsDemoModalOpen(false); handleOpenPortalSelection(); }}
                   icon={<ArrowRight className="w-4 h-4" />}
                 >
                   Start Live Demonstration Flow
@@ -1106,6 +1131,13 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted }) => {
           </div>
         </div>
       )}
+
+      {/* Portal Selection Modal */}
+      <PortalSelectionModal
+        isOpen={isPortalModalOpen}
+        onClose={() => setIsPortalModalOpen(false)}
+        onSelectPortal={handlePortalSelected}
+      />
     </div>
   );
 };

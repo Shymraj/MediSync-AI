@@ -5,6 +5,8 @@ import {
   UserProfile, 
   UserRole, 
   TemporaryOnboardingState,
+  HospitalRegistrationDetails,
+  HospitalLocationContactDetails,
   HospitalBed, 
   Equipment, 
   ResourceRequest, 
@@ -21,6 +23,8 @@ interface AppContextType {
   tempOnboarding: TemporaryOnboardingState;
   resetTempOnboarding: () => void;
   updateTempProfile: (name: string, username: string) => Promise<void>;
+  updateHospitalRegistrationDetails: (details: Partial<HospitalRegistrationDetails>) => void;
+  updateHospitalLocationContact: (details: Partial<HospitalLocationContactDetails>) => void;
   updateTempDistrict: (districtId: string, districtName: string) => void;
   updateTempHospital: (hospitalId: string, hospitalName: string) => void;
   updateTempRole: (role: UserRole) => void;
@@ -40,7 +44,7 @@ interface AppContextType {
   resourceRequests: ResourceRequest[];
   appointments: PatientAppointment[];
   notifications: NotificationItem[];
-  loginWithGoogle: (email?: string, name?: string) => Promise<UserProfile>;
+  loginWithGoogle: (email?: string, name?: string, portal?: 'hospital' | 'patient') => Promise<UserProfile>;
   logout: () => void;
   setUser: React.Dispatch<React.SetStateAction<UserProfile | null>>;
   // Resource lifecycle interactions
@@ -203,6 +207,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTempOnboarding(prev => ({ ...prev, districtId, districtName }));
   };
 
+  const updateHospitalRegistrationDetails = (details: Partial<HospitalRegistrationDetails>) => {
+    setTempOnboarding(prev => ({
+      ...prev,
+      hospitalName: details.hospitalName !== undefined ? details.hospitalName : prev.hospitalName,
+      hospitalType: details.hospitalType !== undefined ? details.hospitalType : prev.hospitalType,
+      registrationNumber: details.registrationNumber !== undefined ? details.registrationNumber : prev.registrationNumber,
+      ownership: details.ownership !== undefined ? details.ownership : prev.ownership,
+      category: details.category !== undefined ? details.category : prev.category,
+      yearEstablished: details.yearEstablished !== undefined ? details.yearEstablished : prev.yearEstablished,
+      hospitalLogo: details.hospitalLogo !== undefined ? details.hospitalLogo : prev.hospitalLogo,
+      hospitalDescription: details.description !== undefined ? details.description : prev.hospitalDescription,
+      website: details.website !== undefined ? details.website : prev.website,
+    }));
+  };
+
+  const updateHospitalLocationContact = (details: Partial<HospitalLocationContactDetails>) => {
+    setTempOnboarding(prev => ({
+      ...prev,
+      hospitalAddress: details.hospitalAddress !== undefined ? details.hospitalAddress : prev.hospitalAddress,
+      areaLocality: details.areaLocality !== undefined ? details.areaLocality : prev.areaLocality,
+      pincode: details.pincode !== undefined ? details.pincode : prev.pincode,
+      hospitalPhone: details.hospitalPhone !== undefined ? details.hospitalPhone : prev.hospitalPhone,
+      hospitalEmail: details.hospitalEmail !== undefined ? details.hospitalEmail : prev.hospitalEmail,
+      emergencyContact: details.emergencyContact !== undefined ? details.emergencyContact : prev.emergencyContact,
+    }));
+  };
+
   const updateTempHospital = (hospitalId: string, hospitalName: string) => {
     setTempOnboarding(prev => ({ ...prev, hospitalId, hospitalName }));
   };
@@ -220,12 +251,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const clearTempDistrict = () => setTempOnboarding(prev => ({ ...prev, districtId: '', districtName: '', hospitalId: '', hospitalName: '', role: null }));
 
   // Google Login backed by backend verification
-  const loginWithGoogle = async (customEmail?: string, customName?: string): Promise<UserProfile> => {
-    const email = customEmail || 'dr.sundar@medisync.gov.in';
-    const name = customName || 'Dr. Sundaramoorthy M.';
+  const loginWithGoogle = async (customEmail?: string, customName?: string, portal?: 'hospital' | 'patient'): Promise<UserProfile> => {
+    const isPatient = portal === 'patient' || customEmail === 'karthik.subramanian@gmail.com';
+    const email = customEmail || (isPatient ? 'karthik.subramanian@gmail.com' : 'dr.sundar@medisync.gov.in');
+    const name = customName || (isPatient ? 'Karthik Subramanian' : 'Dr. Sundaramoorthy M.');
 
     try {
-      const res = await api.loginWithGoogle(email, name);
+      const res = await api.loginWithGoogle(email, name, undefined, portal);
       if (res && res.token && res.user) {
         setAuthToken(res.token);
         setUser(res.user);
@@ -243,8 +275,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       username: email.split('@')[0],
       email,
       avatarUrl: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=2563a6&textColor=ffffff`,
-      roleVerificationStatus: 'none',
-      isOnboarded: false
+      role: isPatient ? 'patient' : undefined,
+      hospitalId: isPatient ? 'hosp-chn-01' : undefined,
+      hospitalName: isPatient ? 'Rajiv Gandhi Government General Hospital (RGGGH)' : undefined,
+      districtId: isPatient ? 'chennai' : undefined,
+      districtName: isPatient ? 'Chennai' : undefined,
+      roleVerificationStatus: isPatient ? 'approved' : 'none',
+      isOnboarded: isPatient ? true : false
     };
     setUser(fallbackUser);
     return fallbackUser;
@@ -395,6 +432,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         tempOnboarding,
         resetTempOnboarding,
         updateTempProfile,
+        updateHospitalRegistrationDetails,
+        updateHospitalLocationContact,
         updateTempDistrict,
         updateTempHospital,
         updateTempRole,

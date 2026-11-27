@@ -9,11 +9,9 @@ interface StepItem {
 }
 
 const STEPS: StepItem[] = [
-  { id: 'profile', label: 'Profile' },
-  { id: 'district', label: 'District' },
-  { id: 'hospital', label: 'Hospital' },
-  { id: 'role', label: 'Role' },
-  { id: 'verification', label: 'Verification' },
+  { id: 'profile', label: '1. Hospital Info' },
+  { id: 'district', label: '2. District' },
+  { id: 'hospital', label: '3. Hospital Details' },
 ];
 
 interface OnboardingProgressBarProps {

@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'doctor' | 'nurse' | 'patient';
+export type UserRole = 'admin' | 'doctor' | 'nurse' | 'patient' | 'hospital' | 'overview';
 
 export type RoleVerificationStatus = 'none' | 'pending' | 'approved' | 'rejected';
 
@@ -21,6 +21,27 @@ export interface UserProfile {
   isOnboarded: boolean; // TRUE only once verification is approved/completed!
 }
 
+export interface HospitalRegistrationDetails {
+  hospitalName: string;
+  hospitalType: string;
+  registrationNumber: string;
+  ownership: 'Government' | 'Private' | 'Trust';
+  category: 'General' | 'Multispeciality' | 'Super speciality';
+  yearEstablished: string;
+  hospitalLogo?: string;
+  description: string;
+  website?: string;
+}
+
+export interface HospitalLocationContactDetails {
+  hospitalAddress: string;
+  areaLocality: string;
+  pincode: string;
+  hospitalPhone: string;
+  hospitalEmail: string;
+  emergencyContact: string;
+}
+
 // Temporary in-memory onboarding session data (NOT persisted until approved/completed!)
 export interface TemporaryOnboardingState {
   name: string;
@@ -31,6 +52,22 @@ export interface TemporaryOnboardingState {
   hospitalName: string;
   role: UserRole | null;
   requestedAt?: string;
+  // Hospital Registration details (Step 1)
+  hospitalType?: string;
+  registrationNumber?: string;
+  ownership?: 'Government' | 'Private' | 'Trust';
+  category?: 'General' | 'Multispeciality' | 'Super speciality';
+  yearEstablished?: string;
+  hospitalLogo?: string;
+  hospitalDescription?: string;
+  website?: string;
+  // Step 3 Location & Contact details (Section 1 & 2)
+  hospitalAddress?: string;
+  areaLocality?: string;
+  pincode?: string;
+  hospitalPhone?: string;
+  hospitalEmail?: string;
+  emergencyContact?: string;
 }
 
 export interface District {

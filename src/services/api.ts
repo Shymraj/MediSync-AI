@@ -53,8 +53,8 @@ async function request(endpoint: string, options: any = {}) {
 
 export const api = {
   // Auth & Profile
-  loginWithGoogle: (email: string, name: string, googleId?: string) => 
-    request('/auth/google', { method: 'POST', body: JSON.stringify({ email, name, googleId }) }),
+  loginWithGoogle: (email: string, name: string, googleId?: string, portal?: string) => 
+    request('/auth/google', { method: 'POST', body: JSON.stringify({ email, name, googleId, portal }) }),
   
   updateProfile: (name: string, username: string) => 
     request('/users/profile', { method: 'PUT', body: JSON.stringify({ name, username }) }),

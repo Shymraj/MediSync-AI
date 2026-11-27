@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from './context/AppContext';
 import { LandingPage } from './components/LandingPage';
+import { PortalSelectionPage } from './components/PortalSelectionPage';
 import { AuthPage } from './components/AuthPage';
-import { ProfileSetupPage } from './components/onboarding/ProfileSetupPage';
+import { HospitalRegistrationDetailsPage } from './components/onboarding/HospitalRegistrationDetailsPage';
+import { HospitalDashboard } from './components/hospital-dashboard';
 import { DistrictSelectionPage } from './components/onboarding/DistrictSelectionPage';
-import { HospitalSelectionPage } from './components/onboarding/HospitalSelectionPage';
+import { HospitalLocationContactPage } from './components/onboarding/HospitalLocationContactPage';
 import { RoleSelectionPage } from './components/onboarding/RoleSelectionPage';
 import { RoleVerificationPage } from './components/onboarding/RoleVerificationPage';
 import { DashboardLoading } from './components/common/DashboardLoading';
@@ -14,20 +16,43 @@ import { AdminDashboard } from './components/dashboards/AdminDashboard';
 import { DoctorDashboard } from './components/dashboards/DoctorDashboard';
 import { NurseDashboard } from './components/dashboards/NurseDashboard';
 import { PatientDashboard } from './components/dashboards/PatientDashboard';
+import { MediSyncAdminLogin, MediSyncAdminDashboard } from './medisync-admin';
 
 export const AppContent: React.FC = () => {
   const { user, tempOnboarding, resetTempOnboarding, completeVerificationApproval } = useApp();
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [isLoadingDashboard, setIsLoadingDashboard] = useState(false);
 
-  // URL hash / path tracking
-  const [currentPath, setCurrentPath] = useState<string>(() => {
+  // URL hash / path tracking (handles '#/route', '#route', and pathname)
+  const getNormalizedRoute = () => {
+    if (typeof window === 'undefined') return '/';
+    const href = (window.location.href || '').toLowerCase();
+
+    // Direct priority match if admin-login or medisync-admin is anywhere in URL
+    if (href.includes('admin-login')) {
+      return '/admin-login';
+    }
+    if (href.includes('medisync-admin')) {
+      return '/medisync-admin';
+    }
+
     const hash = window.location.hash;
     if (hash && hash.startsWith('#/')) {
       return hash.replace('#', '');
     }
+    if (hash && hash.startsWith('#')) {
+      return '/' + hash.replace('#', '');
+    }
     const path = window.location.pathname;
     return path;
+  };
+
+  const [currentPath, setCurrentPath] = useState<string>(getNormalizedRoute);
+
+  const [selectedPortal, setSelectedPortal] = useState<'hospital' | 'patient'>(() => {
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    if (hash.includes('patient')) return 'patient';
+    return 'hospital';
   });
 
   // Strict Page Refresh Reset for Incomplete Onboarding (Requirement 5)
@@ -50,12 +75,7 @@ export const AppContent: React.FC = () => {
 
   useEffect(() => {
     const handlePopState = () => {
-      const hash = window.location.hash;
-      if (hash && hash.startsWith('#/')) {
-        setCurrentPath(hash.replace('#', ''));
-      } else {
-        setCurrentPath(window.location.pathname);
-      }
+      setCurrentPath(getNormalizedRoute());
     };
     window.addEventListener('popstate', handlePopState);
     window.addEventListener('hashchange', handlePopState);
@@ -70,6 +90,32 @@ export const AppContent: React.FC = () => {
     setCurrentPath(path);
   };
 
+  const isAuthRoute = currentPath === '/auth' || currentPath.startsWith('/auth/');
+  const activeAuthPortal: 'hospital' | 'patient' = currentPath.includes('patient') ? 'patient' : selectedPortal;
+
+  // 0. MEDISYNC SUPER ADMIN ROUTES:
+  // Access via URL '#/admin-login', 'admin-login', etc.
+  // Credentials: Username: medisync, Password: medisync123
+  if (currentPath === '/admin-login' || currentPath === 'admin-login' || currentPath.includes('admin-login')) {
+    return (
+      <MediSyncAdminLogin
+        onLoginSuccess={() => navigateTo('/medisync-admin')}
+        onBackToHome={() => navigateTo('/')}
+      />
+    );
+  }
+
+  if (currentPath === '/medisync-admin' || currentPath === 'medisync-admin' || currentPath.includes('medisync-admin')) {
+    return (
+      <MediSyncAdminDashboard
+        onLogout={() => {
+          sessionStorage.removeItem('medisync_super_admin_session');
+          navigateTo('/');
+        }}
+      />
+    );
+  }
+
   // 1. ROOT LANDING PAGE:
   // Root URL ('/', '#/', or '') ALWAYS displays the MediSync AI Landing Page!
   const isRootRoute = currentPath === '/' || currentPath === '' || currentPath === '/landing';
@@ -78,18 +124,57 @@ export const AppContent: React.FC = () => {
     return (
       <LandingPage
         onGetStarted={() => {
-          // Requirement 2: GET STARTED BUTTON BEHAVIOR:
-          if (!user) {
-            // New user / unauthenticated -> Google Authentication
-            navigateTo('/auth');
-          } else if (user.isOnboarded && user.roleVerificationStatus === 'approved') {
-            // Completed approved returning user -> assigned dashboard directly
-            navigateTo(`/dashboard/${user.role || 'admin'}`);
-          } else if (user.roleVerificationStatus === 'pending') {
-            // Pending returning user -> Access Pending
-            navigateTo('/verification');
+          // User clicks Get Started -> navigate directly to Portal Selection screen!
+          navigateTo('/portal-select');
+        }}
+        onSelectPortal={(portal: 'hospital' | 'patient') => {
+          setSelectedPortal(portal);
+          if (portal === 'patient') {
+            navigateTo('/auth/patient');
           } else {
-            // Authenticated but incomplete onboarding -> start fresh from User Profile Setup!
+            navigateTo('/auth/hospital');
+          }
+        }}
+      />
+    );
+  }
+
+  // 2. PORTAL SELECTION ROUTE:
+  // Right after clicking Get Started: Hospital Registration (Top) and Patient Portal (Bottom)
+  if (currentPath === '/portal-select') {
+    return (
+      <PortalSelectionPage
+        onSelectHospital={() => {
+          setSelectedPortal('hospital');
+          // Hospital Registration: Always go to Google verification first, then the 5 onboarding flows!
+          navigateTo('/auth/hospital');
+        }}
+        onSelectPatient={() => {
+          setSelectedPortal('patient');
+          if (user?.role === 'patient') {
+            navigateTo('/dashboard/patient');
+          } else {
+            navigateTo('/auth/patient');
+          }
+        }}
+        onBackToHome={() => navigateTo('/')}
+      />
+    );
+  }
+
+  // 3. AUTHENTICATION ROUTE (Hospital Staff or Patient Portal):
+  if (isAuthRoute) {
+    return (
+      <AuthPage
+        portal={activeAuthPortal}
+        onBack={() => navigateTo('/portal-select')}
+        onSuccess={() => {
+          // Patients ONLY login -> directly into Patient Dashboard!
+          if (activeAuthPortal === 'patient') {
+            navigateTo('/dashboard/patient');
+          } else {
+            // Hospital Registration: Google verify panitu antha 5 flows varanum!
+            // Step 1: /profile -> Step 2: /district -> Step 3: /hospital -> Step 4: /role -> Step 5: /verification
             resetTempOnboarding();
             navigateTo('/profile');
           }
@@ -98,38 +183,29 @@ export const AppContent: React.FC = () => {
     );
   }
 
-  // 2. AUTHENTICATION ROUTE:
-  if (currentPath === '/auth') {
-    return (
-      <AuthPage
-        onBack={() => navigateTo('/')}
-        onSuccess={() => {
-          // Returning approved user:
-          if (user?.isOnboarded && user?.roleVerificationStatus === 'approved') {
-            navigateTo(`/dashboard/${user?.role || 'admin'}`);
-          } else if (user?.roleVerificationStatus === 'pending') {
-            navigateTo('/verification');
-          } else {
-            // New user or incomplete onboarding: start from User Profile Setup
-            resetTempOnboarding();
-            navigateTo('/profile');
-          }
-        }}
-      />
-    );
-  }
 
   // 3. ROUTE GUARDS:
   // If not authenticated at all and trying to access internal routes, guide to auth
   if (!user) {
     return (
       <AuthPage
+        portal={activeAuthPortal}
         onBack={() => navigateTo('/')}
         onSuccess={() => {
-          navigateTo('/profile');
+          if (activeAuthPortal === 'patient') {
+            navigateTo('/dashboard/patient');
+          } else {
+            navigateTo('/profile');
+          }
         }}
       />
     );
+  }
+
+  // Guard: Patients do NOT need staff onboarding sequence -> redirect directly to Patient Dashboard
+  if (user && (user as any).role === 'patient' && ['/profile', '/district', '/hospital', '/role', '/verification'].includes(currentPath)) {
+    navigateTo('/dashboard/patient');
+    return null;
   }
 
   // 4. ONBOARDING SEQUENCE (Stateless temporary session until completed):
@@ -137,9 +213,9 @@ export const AppContent: React.FC = () => {
   // Step 1: User Profile Setup
   if (currentPath === '/profile') {
     return (
-      <ProfileSetupPage 
+      <HospitalRegistrationDetailsPage 
         onComplete={() => navigateTo('/district')} 
-        onBack={() => navigateTo('/auth')}
+        onBack={() => navigateTo('/auth/hospital')}
       />
     );
   }
@@ -154,14 +230,19 @@ export const AppContent: React.FC = () => {
     );
   }
 
-  // Step 3: Hospital Selection
-  if (currentPath === '/hospital') {
+  // Step 3: Hospital Details (Location & Contact Information)
+  if (currentPath === '/hospital' || currentPath === '/hospital-details-contact') {
     return (
-      <HospitalSelectionPage 
-        onComplete={() => navigateTo('/role')} 
+      <HospitalLocationContactPage 
+        onComplete={() => navigateTo('/hospital-dashboard')} 
         onBack={() => navigateTo('/district')} 
       />
     );
+  }
+
+  // Hospital Dashboard Route (Directly entered after Register Hospital)
+  if (currentPath === '/hospital-dashboard') {
+    return <HospitalDashboard />;
   }
 
   // Step 4: Role Selection

@@ -86,7 +86,7 @@ export const RoleSelectionPage: React.FC<RoleSelectionProps> = ({ onComplete, on
           onClick={handleBackClick}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#64748B] hover:text-[#2563A6] mb-4 transition-colors cursor-pointer"
         >
-          <ArrowLeft className="w-4 h-4" /> Back to Hospital Selection
+          <ArrowLeft className="w-4 h-4" /> Back to Hospital Details
         </button>
 
         <div className="text-center mb-8">

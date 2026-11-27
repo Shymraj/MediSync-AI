@@ -14,7 +14,9 @@ import {
   Share2, 
   Clock, 
   ShieldCheck,
-  CheckSquare
+  CheckSquare,
+  LogOut,
+  MapPin
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { UserRole } from '../../types';
@@ -26,7 +28,7 @@ interface SidebarProps {
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activeRole }) => {
-  const { user } = useApp();
+  const { user, logout } = useApp();
   const role: UserRole = activeRole || user?.role || 'admin';
 
   // Specific role navigation items as defined in spec
@@ -69,12 +71,27 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
     { id: 'profile', label: 'Patient Record', icon: <Users className="w-4 h-4" /> }
   ];
 
+  const hospitalNav = [
+    { id: 'dashboard', label: 'Hospital Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'facility_info', label: 'Facility Profile', icon: <Building2 className="w-4 h-4" /> },
+    { id: 'location_contact', label: 'Location & Helplines', icon: <MapPin className="w-4 h-4" /> },
+    { id: 'bed_readiness', label: 'Bed Master Status', icon: <Bed className="w-4 h-4" /> },
+    { id: 'departments', label: 'Clinical Wards', icon: <Activity className="w-4 h-4" /> }
+  ];
+
   const navItems = {
+    overview: hospitalNav,
+    hospital: hospitalNav,
     admin: adminNav,
     doctor: doctorNav,
     nurse: nurseNav,
     patient: patientNav
-  }[role];
+  }[role] || hospitalNav;
+
+  const handleLogout = () => {
+    logout();
+    window.location.hash = '#/';
+  };
 
   return (
     <aside className="w-64 bg-white border-r border-[#E2E8F0] flex flex-col shrink-0 min-h-screen">
@@ -90,7 +107,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
       </div>
 
       {/* Navigation Links */}
-      <nav className="p-4 space-y-1 flex-1">
+      <nav className="p-4 space-y-1 flex-1 overflow-y-auto">
         <div className="text-[10px] font-bold text-slate-400 px-3 py-1.5 uppercase tracking-wider">
           {role} Menu
         </div>
@@ -113,7 +130,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
         })}
       </nav>
 
-      {/* Hospital Footer in Sidebar */}
+      {/* Hospital Footer & Logout in Sidebar */}
       <div className="p-4 border-t border-[#E2E8F0] bg-slate-50/50">
         <div className="text-[10px] text-[#64748B] flex items-center gap-1 font-semibold uppercase tracking-wider">
           <ShieldCheck className="w-3.5 h-3.5 text-[#15803D]" />
@@ -124,6 +141,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
         </div>
         <div className="text-[11px] text-[#64748B] mt-0.5">
           District: {user?.districtName || 'Chennai'}
+        </div>
+
+        {/* Dedicated Sidebar Logout Button */}
+        <div className="mt-3 pt-3 border-t border-slate-200">
+          <button
+            onClick={handleLogout}
+            title="Log out of MediSync"
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 hover:text-red-700 transition-colors border border-red-200 cursor-pointer shadow-2xs"
+          >
+            <LogOut className="w-3.5 h-3.5 text-red-600" />
+            <span>Sign Out / Logout</span>
+          </button>
         </div>
       </div>
     </aside>

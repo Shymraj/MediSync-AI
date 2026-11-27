@@ -1,4 +1,4 @@
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
@@ -7,7 +7,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const dbPath = path.join(__dirname, 'medisync.db');
-export const db = new Database(dbPath);
+export const db = new DatabaseSync(dbPath);
+db.pragma = (sql) => db.exec(`PRAGMA ${sql};`);
 
 // Enable foreign keys and WAL mode for high performance
 db.pragma('journal_mode = WAL');
@@ -159,9 +160,84 @@ export function initDatabase() {
       details TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
+
+    -- 10. Registered Hospitals (Platform Registry for MediSync Super Admin)
+    CREATE TABLE IF NOT EXISTS registered_hospitals (
+      id TEXT PRIMARY KEY,
+      hospital_name TEXT NOT NULL,
+      hospital_type TEXT,
+      registration_number TEXT UNIQUE NOT NULL,
+      ownership TEXT,
+      category TEXT,
+      year_established TEXT,
+      hospital_logo TEXT,
+      description TEXT,
+      website TEXT,
+      district_id TEXT,
+      district_name TEXT,
+      hospital_address TEXT,
+      area_locality TEXT,
+      pincode TEXT,
+      hospital_phone TEXT,
+      hospital_email TEXT,
+      emergency_contact TEXT,
+      status TEXT DEFAULT 'Verified',
+      total_beds INTEGER DEFAULT 250,
+      icu_beds INTEGER DEFAULT 35,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
   `);
 
   seedInitialData();
+
+  // Check and seed registered hospitals if empty
+  try {
+    const regCount = db.prepare('SELECT COUNT(*) as count FROM registered_hospitals').get().count;
+    if (regCount === 0) {
+      const insertReg = db.prepare(`
+        INSERT INTO registered_hospitals (
+          id, hospital_name, hospital_type, registration_number, ownership, category,
+          year_established, hospital_logo, description, website, district_id, district_name,
+          hospital_address, area_locality, pincode, hospital_phone, hospital_email, emergency_contact, status, total_beds, icu_beds
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      insertReg.run(
+        'reg-001', 'Rajiv Gandhi Government General Hospital (RGGGH)', 'Government Teaching Hospital',
+        'TN-MED-REG-2026-8941', 'Government', 'Super speciality', '1664', null,
+        'Premier tertiary care government general hospital serving as state critical trauma node.', 'https://rgggh.tn.gov.in',
+        'chennai', 'Chennai', 'EVR Periyar Salai, Park Town', 'Park Town', '600003',
+        '+91 44 2530 5000', 'contact.rgggh@medisync.tn.gov.in', '044-25305112', 'Verified', 1750, 180
+      );
+
+      insertReg.run(
+        'reg-002', 'Madurai Medical College & Government Rajaji Hospital', 'District Headquarter Hospital',
+        'TN-MED-REG-2026-4412', 'Government', 'Multispeciality', '1854', null,
+        'South Tamil Nadu referral hospital and emergency clinical research institution.', 'https://grh.madurai.tn.gov.in',
+        'madurai', 'Madurai', 'Panagal Road, Goripalayam', 'Goripalayam', '625020',
+        '+91 452 253 2535', 'grh.madurai@medisync.tn.gov.in', '0452-2532536', 'Verified', 1200, 110
+      );
+
+      insertReg.run(
+        'reg-003', 'Coimbatore Medical College Hospital (CMCH)', 'Government Teaching Hospital',
+        'TN-MED-REG-2026-7721', 'Government', 'Super speciality', '1966', null,
+        'Western zone hub hospital with trauma, cardiovascular and pediatric ICU capabilities.', 'https://cmch.coimbatore.tn.gov.in',
+        'coimbatore', 'Coimbatore', 'Trichy Road, Gopalapuram', 'Gopalapuram', '641018',
+        '+91 422 230 1393', 'cmch.coimbatore@medisync.tn.gov.in', '0422-2301394', 'Verified', 1050, 95
+      );
+
+      insertReg.run(
+        'reg-004', 'Apollo Speciality Hospital (Greams Road)', 'Private Super Speciality Hospital',
+        'TN-PVT-REG-2026-1029', 'Private', 'Super speciality', '1983', null,
+        'NABH accredited tertiary hospital affiliated for emergency regional overflow balancing.', 'https://apollohospitals.com',
+        'chennai', 'Chennai', '21 Greams Lane, Thousand Lights', 'Thousand Lights', '600006',
+        '+91 44 2829 0200', 'info@apollohospitals.com', '1066', 'Verified', 600, 85
+      );
+    }
+  } catch (e) {
+    console.error('Error seeding registered hospitals:', e.message);
+  }
+
 }
 
 function seedInitialData() {

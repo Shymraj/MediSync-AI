@@ -1,10 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { Activity, ShieldCheck, AlertCircle, ArrowLeft, CheckCircle2, X } from 'lucide-react';
+import { 
+  Activity, 
+  ShieldCheck, 
+  AlertCircle, 
+  ArrowLeft, 
+  CheckCircle2, 
+  X,
+  Building2,
+  User,
+  HeartHandshake,
+  Stethoscope,
+  Clock,
+  Sparkles
+} from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
 interface AuthPageProps {
   onBack: () => void;
   onSuccess: () => void;
+  portal?: 'hospital' | 'patient';
 }
 
 interface GoogleAccount {
@@ -13,40 +27,45 @@ interface GoogleAccount {
   avatar: string;
   verifiedEmail: boolean;
   roleHint: string;
+  portal: 'hospital' | 'patient';
 }
 
-const AVAILABLE_GOOGLE_ACCOUNTS: GoogleAccount[] = [
+const ALL_GOOGLE_ACCOUNTS: GoogleAccount[] = [
   {
     name: 'Dr. Sundaramoorthy M.',
     email: 'dr.sundar@medisync.gov.in',
     avatar: 'https://images.unsplash.com/photo-1622253692010-333f2da6031d?auto=format&fit=crop&w=120&q=80',
     verifiedEmail: true,
-    roleHint: 'Hospital Attending Physician'
+    roleHint: 'Hospital Attending Physician (Critical Care)',
+    portal: 'hospital'
   },
   {
     name: 'Dr. Vasanth Kumar',
     email: 'admin.vasanth@medisync.gov.in',
     avatar: 'https://images.unsplash.com/photo-1551836022-d5d88e9218df?auto=format&fit=crop&w=120&q=80',
     verifiedEmail: true,
-    roleHint: 'Medical Superintendent'
+    roleHint: 'Medical Superintendent / Administrator',
+    portal: 'hospital'
   },
   {
     name: 'Nurse Deepa R.',
     email: 'deepa.nurse@medisync.gov.in',
     avatar: 'https://images.unsplash.com/photo-1579684385127-1ef15d508118?auto=format&fit=crop&w=120&q=80',
     verifiedEmail: true,
-    roleHint: 'Critical Care Ward Nurse'
+    roleHint: 'Critical Care Ward Nurse',
+    portal: 'hospital'
   },
   {
     name: 'Karthik Subramanian',
     email: 'karthik.subramanian@gmail.com',
     avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=120&q=80',
     verifiedEmail: true,
-    roleHint: 'Verified Personal Google Account'
+    roleHint: 'Verified Personal Google Account (Patient)',
+    portal: 'patient'
   }
 ];
 
-export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
+export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess, portal = 'hospital' }) => {
   const { loginWithGoogle } = useApp();
   const [isGoogleModalOpen, setIsGoogleModalOpen] = useState(false);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
@@ -54,9 +73,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
   const [customEmail, setCustomEmail] = useState('');
   const [showAddAccount, setShowAddAccount] = useState(false);
 
+  const isPatientPortal = portal === 'patient';
+
+  // Accounts filtered by portal type
+  const availableAccounts = ALL_GOOGLE_ACCOUNTS.filter(acc => acc.portal === portal);
+
   // Initialize official Google Identity Services token client if available
   useEffect(() => {
-    // If window.google is loaded in browser, we can also bind native GIS
     if (typeof window !== 'undefined' && (window as any).google) {
       try {
         const client = (window as any).google.accounts.oauth2.initTokenClient({
@@ -65,13 +88,12 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
           callback: async (tokenResponse: any) => {
             if (tokenResponse && tokenResponse.access_token) {
               try {
-                // Fetch real profile from Google API
                 const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
                   headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
                 });
                 const userInfo = await res.json();
                 if (userInfo && userInfo.email) {
-                  await loginWithGoogle(userInfo.email, userInfo.name || userInfo.email.split('@')[0]);
+                  await loginWithGoogle(userInfo.email, userInfo.name || userInfo.email.split('@')[0], portal);
                   onSuccess();
                   return;
                 }
@@ -86,25 +108,22 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
         });
         (window as any).__googleTokenClient = client;
       } catch (err) {
-        // Fallback to official Google account selection dialog
+        // Fallback to high-fidelity Google account selection dialog
       }
     }
-  }, []);
+  }, [portal]);
 
   const handleContinueWithGoogleClick = () => {
     setError(null);
-    // Check if GIS client can open native popup
     const gisClient = (window as any).__googleTokenClient;
     if (gisClient && window.location.protocol === 'https:') {
       try {
         gisClient.requestAccessToken({ prompt: 'select_account' });
         return;
       } catch (e) {
-        // Fallback to high-fidelity Google Account Chooser
+        // Fallback
       }
     }
-
-    // Step 2: Open the official Google OAuth account selection screen
     setIsGoogleModalOpen(true);
   };
 
@@ -113,16 +132,11 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
     setError(null);
 
     try {
-      // Step 4 & 5: Complete Google's authentication and email verification
-      await new Promise(r => setTimeout(r, 650)); // realistic OAuth token exchange
-
-      // Step 6: Verify the authenticated Google identity with backend
-      const user = await loginWithGoogle(account.email, account.name);
-
+      await new Promise(r => setTimeout(r, 650));
+      const user = await loginWithGoogle(account.email, account.name, portal);
       setIsGoogleModalOpen(false);
       setIsAuthenticating(false);
 
-      // Step 7: Only after successful authentication, navigate to next step
       if (user) {
         onSuccess();
       }
@@ -145,7 +159,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
     try {
       const derivedName = customEmail.split('@')[0].replace(/[._]/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
       await new Promise(r => setTimeout(r, 650));
-      const user = await loginWithGoogle(customEmail.trim().toLowerCase(), derivedName);
+      const user = await loginWithGoogle(customEmail.trim().toLowerCase(), derivedName, portal);
 
       setIsGoogleModalOpen(false);
       setIsAuthenticating(false);
@@ -160,10 +174,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
   };
 
   const handleCancelGoogleAuth = () => {
-    // If authentication is cancelled or user closes the window, do not proceed!
     setIsGoogleModalOpen(false);
     setIsAuthenticating(false);
-    setError('Authentication was cancelled. Please click "Continue with Google" to select an account.');
+    setError('Authentication was cancelled. Click "Continue with Google" to select an account.');
   };
 
   return (
@@ -173,29 +186,52 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
           onClick={onBack}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-[#64748B] hover:text-[#2563A6] mb-6 transition-colors cursor-pointer"
         >
-          <ArrowLeft className="w-4 h-4" /> Back to Landing Page
+          <ArrowLeft className="w-4 h-4" /> Back to Portal Selection
         </button>
 
+        {/* Brand Header */}
         <div className="flex items-center justify-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-[#2563A6] flex items-center justify-center text-white shadow-xs">
-            <Activity className="w-6 h-6 stroke-[2.5]" />
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-white shadow-xs ${
+            isPatientPortal ? 'bg-emerald-600' : 'bg-[#1A56DB]'
+          }`}>
+            {isPatientPortal ? (
+              <User className="w-6 h-6 stroke-[2.5]" />
+            ) : (
+              <Building2 className="w-6 h-6 stroke-[2.5]" />
+            )}
           </div>
           <div>
-            <h2 className="text-xl font-bold tracking-tight text-[#1E293B]">MediSync AI</h2>
-            <p className="text-xs text-[#64748B]">Enterprise Healthcare Resource Network</p>
+            <h2 className="text-xl font-bold tracking-tight text-[#1E293B]">
+              MediSync <span className={isPatientPortal ? 'text-emerald-600' : 'text-[#1A56DB]'}>AI</span>
+            </h2>
+            <p className="text-xs text-[#64748B]">
+              {isPatientPortal ? 'Public Patient Care & OPD Services' : 'Enterprise Healthcare Resource Network'}
+            </p>
           </div>
         </div>
 
-        <h3 className="mt-6 text-center text-xl font-bold text-[#1E293B]">
-          Sign in to your Institutional Account
-        </h3>
-        <p className="mt-1 text-center text-xs text-[#64748B]">
-          Hospital staff, clinicians, and patients authenticate via Google SSO
-        </p>
+        {/* Portal-specific Titles */}
+        <div className="mt-6 text-center">
+          <span className={`inline-block px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider mb-2 ${
+            isPatientPortal 
+              ? 'bg-emerald-100 text-emerald-800' 
+              : 'bg-blue-100 text-[#1A56DB]'
+          }`}>
+            {isPatientPortal ? 'Patient Portal Sign In' : 'Hospital Registration & Staff Sign In'}
+          </span>
+          <h3 className="text-xl font-bold text-[#1E293B]">
+            {isPatientPortal ? 'Sign in to your Patient Account' : 'Institutional Staff Authentication'}
+          </h3>
+          <p className="mt-1 text-xs text-[#64748B] max-w-sm mx-auto">
+            {isPatientPortal 
+              ? 'Sign in with your Google account to check live bed readiness, OPD token queue, and book appointments' 
+              : 'Doctors, nurses, and hospital administrators authenticate via Institutional Google SSO'}
+          </p>
+        </div>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md">
-        <div className="bg-white py-8 px-6 sm:px-10 shadow-sm border border-[#E2E8F0] rounded-xl">
+      <div className="mt-7 sm:mx-auto sm:w-full sm:max-w-md">
+        <div className="bg-white py-8 px-6 sm:px-10 shadow-sm border border-[#E2E8F0] rounded-2xl">
           {error && (
             <div className="mb-5 p-3 rounded-lg bg-red-50 border border-red-200 flex items-start gap-2.5 text-xs text-[#DC2626]">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
@@ -203,11 +239,26 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
             </div>
           )}
 
-          <div className="p-4 bg-slate-50 border border-[#E2E8F0] rounded-lg mb-6 text-center">
-            <ShieldCheck className="w-6 h-6 text-[#2563A6] mx-auto mb-2" />
-            <div className="text-xs font-bold text-[#1E293B]">Federated Google Identity Verification</div>
+          {/* Info Card */}
+          <div className={`p-4 rounded-xl mb-6 text-center border ${
+            isPatientPortal 
+              ? 'bg-emerald-50/60 border-emerald-200/80' 
+              : 'bg-slate-50 border-[#E2E8F0]'
+          }`}>
+            {isPatientPortal ? (
+              <CheckCircle2 className="w-6 h-6 text-emerald-600 mx-auto mb-2" />
+            ) : (
+              <ShieldCheck className="w-6 h-6 text-[#1A56DB] mx-auto mb-2" />
+            )}
+            <div className="text-xs font-bold text-[#1E293B]">
+              {isPatientPortal 
+                ? 'Instant Patient Access' 
+                : 'Federated Google Medical Verification'}
+            </div>
             <p className="text-[11px] text-[#64748B] mt-1 leading-relaxed">
-              MediSync AI integrates with Google OAuth 2.0. Click below to open the official Google account selection dialog and authorize your institutional identity.
+              {isPatientPortal 
+                ? 'Zero medical clearance required. Click below to sign in with your Google account and enter your personal patient dashboard directly.' 
+                : 'Click below to authorize your institutional identity and proceed to district & hospital onboarding registration.'}
             </p>
           </div>
 
@@ -215,9 +266,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
           <button
             type="button"
             onClick={handleContinueWithGoogleClick}
-            className="w-full flex items-center justify-center gap-3 py-3 px-4 border border-[#CBD5E1] rounded-lg shadow-2xs bg-white text-xs font-semibold text-[#1E293B] hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-[#2563A6] transition-all cursor-pointer"
+            className={`w-full flex items-center justify-center gap-3 py-3.5 px-4 border rounded-xl shadow-2xs bg-white text-xs font-semibold text-[#1E293B] hover:bg-slate-50 focus:outline-hidden focus:ring-2 focus:ring-offset-1 transition-all cursor-pointer ${
+              isPatientPortal 
+                ? 'border-emerald-300 focus:ring-emerald-600 hover:border-emerald-400' 
+                : 'border-[#CBD5E1] focus:ring-[#1A56DB]'
+            }`}
           >
-            {/* Real Google SVG Icon */}
+            {/* Google SVG Icon */}
             <svg className="w-4 h-4" viewBox="0 0 24 24">
               <path
                 fill="#4285F4"
@@ -236,23 +291,23 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
                 d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"
               />
             </svg>
-            Continue with Google
+            <span>
+              {isPatientPortal 
+                ? 'Continue with Google (Patient Login)' 
+                : 'Continue with Google (Hospital SSO)'}
+            </span>
           </button>
 
           <div className="mt-6 flex items-center justify-center gap-1.5 text-[11px] text-[#64748B]">
-            <ShieldCheck className="w-3.5 h-3.5 text-[#15803D]" />
-            <span>Encrypted OAuth 2.0 institutional token exchange</span>
+            <ShieldCheck className={`w-3.5 h-3.5 ${isPatientPortal ? 'text-emerald-600' : 'text-[#15803D]'}`} />
+            <span>Encrypted OAuth 2.0 security & privacy protection</span>
           </div>
         </div>
       </div>
 
       {/* 
         ============================================================
-        OFFICIAL GOOGLE OAUTH ACCOUNT SELECTION SCREEN
-        - Matches Google's exact OAuth 2.0 Account Chooser UI
-        - Displays Google branding, Choose an account header,
-          account items with avatar/name/email, and Add another account
-        - If cancelled or closed, user remains unauthenticated
+        GOOGLE OAUTH ACCOUNT SELECTION SCREEN
         ============================================================
       */}
       {isGoogleModalOpen && (
@@ -282,13 +337,13 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
 
               <h3 className="text-xl font-medium text-slate-900">Choose an account</h3>
               <p className="text-xs text-slate-500 mt-1">
-                to continue to <strong className="text-slate-800 font-semibold">MediSync AI</strong>
+                to continue to <strong className="text-slate-800 font-semibold">MediSync AI ({isPatientPortal ? 'Patient Portal' : 'Hospital Registration'})</strong>
               </p>
             </div>
 
             {/* Account List */}
             <div className="px-6 py-4 max-h-[380px] overflow-y-auto divide-y divide-slate-100">
-              {AVAILABLE_GOOGLE_ACCOUNTS.map((acc) => (
+              {availableAccounts.map((acc) => (
                 <button
                   key={acc.email}
                   type="button"
@@ -307,7 +362,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
                         {acc.name}
                       </div>
                       <div className="text-xs text-slate-500 truncate">{acc.email}</div>
-                      <div className="text-[10px] text-blue-600 font-medium mt-0.5">{acc.roleHint}</div>
+                      <div className={`text-[10px] font-medium mt-0.5 ${isPatientPortal ? 'text-emerald-600' : 'text-blue-600'}`}>
+                        {acc.roleHint}
+                      </div>
                     </div>
                   </div>
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2" />
@@ -329,15 +386,17 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
                 </button>
               ) : (
                 <form onSubmit={handleCustomAccountSubmit} className="py-3 px-2 space-y-2">
-                  <label className="block text-xs font-medium text-slate-700">Enter Google Email:</label>
+                  <label className="block text-xs font-medium text-slate-700">
+                    {isPatientPortal ? 'Enter your Google Email (Patient):' : 'Enter Hospital Google Email:'}
+                  </label>
                   <input
                     type="email"
                     value={customEmail}
                     onChange={(e) => setCustomEmail(e.target.value)}
-                    placeholder="name@hospital.gov.in or @gmail.com"
+                    placeholder={isPatientPortal ? 'name@gmail.com' : 'name@hospital.gov.in'}
                     autoFocus
                     required
-                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600"
+                    className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-hidden focus:ring-2 focus:ring-blue-600"
                   />
                   <div className="flex items-center justify-end gap-2 pt-1">
                     <button
@@ -350,7 +409,9 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
                     <button
                       type="submit"
                       disabled={isAuthenticating}
-                      className="px-4 py-1.5 text-xs bg-blue-600 text-white font-medium rounded-md hover:bg-blue-700"
+                      className={`px-4 py-1.5 text-xs text-white font-medium rounded-md ${
+                        isPatientPortal ? 'bg-emerald-600 hover:bg-emerald-700' : 'bg-blue-600 hover:bg-blue-700'
+                      }`}
                     >
                       Verify & Sign In
                     </button>
@@ -361,7 +422,7 @@ export const AuthPage: React.FC<AuthPageProps> = ({ onBack, onSuccess }) => {
 
             {/* Google OAuth Footer */}
             <div className="px-8 py-4 bg-slate-50/80 border-t border-slate-100 text-[11px] text-slate-500 flex items-center justify-between">
-              <span>To continue, Google will share your name, email address, and profile picture with MediSync AI.</span>
+              <span>To continue, Google will share your name and email with MediSync AI.</span>
             </div>
           </div>
         </div>

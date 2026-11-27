@@ -87,13 +87,14 @@ function logAudit(hospitalId, userId, userRole, action, entityType, entityId, de
 // Google OAuth Login / Verify endpoint
 app.post('/api/auth/google', (req, res) => {
   try {
-    const { email, name, googleId } = req.body;
+    const { email, name, googleId, portal, role: requestedRole } = req.body;
 
     if (!email) {
       return res.status(400).json({ error: 'Email is required for Google OAuth' });
     }
 
     let user = db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+    const isPatientPortal = portal === 'patient' || requestedRole === 'patient' || email === 'karthik.subramanian@gmail.com';
 
     if (!user) {
       // New user registration
@@ -101,13 +102,31 @@ app.post('/api/auth/google', (req, res) => {
       const generatedUsername = email.split('@')[0].toLowerCase().replace(/[^a-z0-9]/g, '_');
       const avatarUrl = `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name || 'User')}&backgroundColor=2563a6&textColor=ffffff`;
 
+      const initialRole = isPatientPortal ? 'patient' : null;
+      const initialVerification = isPatientPortal ? 'approved' : 'none';
+      const initialOnboarded = isPatientPortal ? 1 : 0;
+      const initialHospital = isPatientPortal ? 'hosp-chn-01' : null;
+      const initialDistrict = isPatientPortal ? 'chennai' : null;
+
       db.prepare(`
-        INSERT INTO users (id, google_id, email, name, username, avatar_url, role, verification_status, is_onboarded)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, 'none', 0)
-      `).run(newId, googleId || ('goog_' + Date.now()), email, name || 'User', generatedUsername, avatarUrl);
+        INSERT INTO users (id, google_id, email, name, username, avatar_url, role, verification_status, is_onboarded, hospital_id, district_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(newId, googleId || ('goog_' + Date.now()), email, name || 'User', generatedUsername, avatarUrl, initialRole, initialVerification, initialOnboarded, initialHospital, initialDistrict);
 
       user = db.prepare('SELECT * FROM users WHERE id = ?').get(newId);
+    } else if (isPatientPortal && (!user.role || user.role === 'patient')) {
+      db.prepare(`
+        UPDATE users 
+        SET role = 'patient', verification_status = 'approved', is_onboarded = 1,
+            hospital_id = COALESCE(hospital_id, 'hosp-chn-01'),
+            district_id = COALESCE(district_id, 'chennai')
+        WHERE id = ?
+      `).run(user.id);
+      user = db.prepare('SELECT * FROM users WHERE id = ?').get(user.id);
     }
+
+    const hospital = user.hospital_id ? db.prepare('SELECT name FROM hospitals WHERE id = ?').get(user.hospital_id) : null;
+    const district = user.district_id ? db.prepare('SELECT name FROM districts WHERE id = ?').get(user.district_id) : null;
 
     const token = jwt.sign(
       { id: user.id, email: user.email, role: user.role, hospitalId: user.hospital_id },
@@ -125,7 +144,9 @@ app.post('/api/auth/google', (req, res) => {
         avatarUrl: user.avatar_url,
         role: user.role,
         hospitalId: user.hospital_id,
+        hospitalName: hospital?.name,
         districtId: user.district_id,
+        districtName: district?.name,
         roleVerificationStatus: user.verification_status,
         rejectionReason: user.rejection_reason,
         isOnboarded: Boolean(user.is_onboarded)
@@ -280,6 +301,166 @@ app.get('/api/districts', (req, res) => {
     res.json(districts);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch districts', details: err.message });
+  }
+});
+
+
+// ==========================================
+// 2B. MEDISYNC PLATFORM SUPER ADMIN & REGISTERED HOSPITALS
+// ==========================================
+
+// MediSync Super Admin Login: Username: medisync, Password: medisync123
+app.post('/api/medisync-admin/login', (req, res) => {
+  try {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Username and password are required' });
+    }
+
+    if (username.trim().toLowerCase() === 'medisync' && password.trim() === 'medisync123') {
+      const token = jwt.sign(
+        { id: 'usr_super_admin', email: 'admin@medisync.ai', role: 'medisync_admin' },
+        JWT_SECRET,
+        { expiresIn: '7d' }
+      );
+      return res.json({
+        success: true,
+        token,
+        admin: {
+          id: 'medisync_super_admin',
+          username: 'medisync',
+          name: 'MediSync Platform Super Admin',
+          role: 'medisync_admin',
+          avatarUrl: 'https://api.dicebear.com/7.x/initials/svg?seed=MS&backgroundColor=1a56db&textColor=ffffff'
+        }
+      });
+    }
+
+    return res.status(401).json({ error: 'Invalid MediSync Super Admin credentials. Use Username: medisync and Password: medisync123' });
+  } catch (err) {
+    res.status(500).json({ error: 'Admin login error', details: err.message });
+  }
+});
+
+// Get all registered hospitals (for MediSync Super Admin)
+app.get('/api/registered-hospitals', (req, res) => {
+  try {
+    const list = db.prepare('SELECT * FROM registered_hospitals ORDER BY created_at DESC').all();
+    res.json(list.map(h => ({
+      id: h.id,
+      hospitalName: h.hospital_name,
+      hospitalType: h.hospital_type,
+      registrationNumber: h.registration_number,
+      ownership: h.ownership,
+      category: h.category,
+      yearEstablished: h.year_established,
+      hospitalLogo: h.hospital_logo,
+      description: h.description,
+      website: h.website,
+      districtId: h.district_id,
+      districtName: h.district_name,
+      hospitalAddress: h.hospital_address,
+      areaLocality: h.area_locality,
+      pincode: h.pincode,
+      hospitalPhone: h.hospital_phone,
+      hospitalEmail: h.hospital_email,
+      emergencyContact: h.emergency_contact,
+      status: h.status || 'Verified',
+      totalBeds: h.total_beds || 250,
+      icuBeds: h.icu_beds || 35,
+      createdAt: h.created_at
+    })));
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch registered hospitals', details: err.message });
+  }
+});
+
+// Register a new hospital into Platform Registry
+app.post('/api/registered-hospitals', (req, res) => {
+  try {
+    const {
+      hospitalName,
+      hospitalType,
+      registrationNumber,
+      ownership,
+      category,
+      yearEstablished,
+      hospitalLogo,
+      description,
+      website,
+      districtId,
+      districtName,
+      hospitalAddress,
+      areaLocality,
+      pincode,
+      hospitalPhone,
+      hospitalEmail,
+      emergencyContact
+    } = req.body;
+
+    if (!hospitalName || !registrationNumber) {
+      return res.status(400).json({ error: 'Hospital name and registration number are required' });
+    }
+
+    const regId = 'reg_' + Date.now();
+    const existing = db.prepare('SELECT id FROM registered_hospitals WHERE registration_number = ?').get(registrationNumber);
+
+    if (existing) {
+      db.prepare(`
+        UPDATE registered_hospitals SET
+          hospital_name = ?, hospital_type = ?, ownership = ?, category = ?,
+          year_established = ?, hospital_logo = ?, description = ?, website = ?,
+          district_id = ?, district_name = ?, hospital_address = ?, area_locality = ?,
+          pincode = ?, hospital_phone = ?, hospital_email = ?, emergency_contact = ?
+        WHERE id = ?
+      `).run(
+        hospitalName, hospitalType || 'General Hospital', ownership || 'Government', category || 'General',
+        yearEstablished || '2026', hospitalLogo || null, description || '', website || '',
+        districtId || 'chennai', districtName || 'Chennai', hospitalAddress || '', areaLocality || '',
+        pincode || '', hospitalPhone || '', hospitalEmail || '', emergencyContact || '',
+        existing.id
+      );
+    } else {
+      db.prepare(`
+        INSERT INTO registered_hospitals (
+          id, hospital_name, hospital_type, registration_number, ownership, category,
+          year_established, hospital_logo, description, website, district_id, district_name,
+          hospital_address, area_locality, pincode, hospital_phone, hospital_email, emergency_contact, status, total_beds, icu_beds
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        regId, hospitalName, hospitalType || 'General Hospital', registrationNumber, ownership || 'Government', category || 'General',
+        yearEstablished || '2026', hospitalLogo || null, description || '', website || '',
+        districtId || 'chennai', districtName || 'Chennai', hospitalAddress || '', areaLocality || '',
+        pincode || '', hospitalPhone || '', hospitalEmail || '', emergencyContact || '', 'Verified', 250, 35
+      );
+    }
+
+    // Broadcast new hospital event via Socket.IO
+    io.emit('new_hospital_registered', {
+      id: existing ? existing.id : regId,
+      hospitalName,
+      districtName: districtName || 'Chennai',
+      registrationNumber,
+      ownership: ownership || 'Government',
+      status: 'Verified',
+      createdAt: new Date().toISOString()
+    });
+
+    res.json({ success: true, message: 'Hospital registered successfully in MediSync registry' });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to register hospital', details: err.message });
+  }
+});
+
+// Update hospital verification status
+app.patch('/api/registered-hospitals/:id/status', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    db.prepare('UPDATE registered_hospitals SET status = ? WHERE id = ?').run(status || 'Verified', id);
+    res.json({ success: true, status });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update status', details: err.message });
   }
 });
 

@@ -54,7 +54,7 @@ export const DistrictSelectionPage: React.FC<DistrictSelectionProps> = ({ onComp
           onClick={handleBackClick}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#64748B] hover:text-[#2563A6] mb-4 transition-colors cursor-pointer"
         >
-          <ArrowLeft className="w-4 h-4" /> Back to User Profile
+          <ArrowLeft className="w-4 h-4" /> Back to Hospital Info
         </button>
 
         {/* Header */}
