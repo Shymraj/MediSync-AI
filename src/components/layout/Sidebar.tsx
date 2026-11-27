@@ -33,13 +33,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
 
   // Specific role navigation items as defined in spec
   const adminNav = [
-    { id: 'dashboard', label: 'Command Center', icon: <LayoutDashboard className="w-4 h-4" /> },
-    { id: 'resources', label: 'Resource Registry', icon: <Activity className="w-4 h-4" /> },
-    { id: 'beds', label: 'Bed Master Control', icon: <Bed className="w-4 h-4" /> },
-    { id: 'equipment', label: 'Equipment Telemetry', icon: <Activity className="w-4 h-4" /> },
+    { id: 'dashboard', label: 'Hospital Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'beds', label: 'Bed Master Status', icon: <Bed className="w-4 h-4" /> },
     { id: 'departments', label: 'Departments', icon: <Building2 className="w-4 h-4" /> },
-    { id: 'staff', label: 'Staff Verification', icon: <Users className="w-4 h-4" /> },
+    { id: 'wards', label: 'Clinical Wards', icon: <Activity className="w-4 h-4" /> },
+    { id: 'resources', label: 'Resource Registry', icon: <Activity className="w-4 h-4" /> },
+    { id: 'equipment', label: 'Equipment Telemetry', icon: <Activity className="w-4 h-4" /> },
     { id: 'requests', label: 'Resource Requests', icon: <ClipboardList className="w-4 h-4" /> },
+    { id: 'staff', label: 'Staff Verification', icon: <Users className="w-4 h-4" /> },
     { id: 'reports', label: 'Readiness Reports', icon: <FileText className="w-4 h-4" /> },
     { id: 'settings', label: 'Hospital Settings', icon: <Settings className="w-4 h-4" /> }
   ];
@@ -77,7 +78,14 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
     { id: 'facility_info', label: 'Facility Profile', icon: <Building2 className="w-4 h-4" /> },
     { id: 'location_contact', label: 'Location & Helplines', icon: <MapPin className="w-4 h-4" /> },
     { id: 'bed_readiness', label: 'Bed Master Status', icon: <Bed className="w-4 h-4" /> },
-    { id: 'departments', label: 'Clinical Wards', icon: <Activity className="w-4 h-4" /> }
+    { id: 'departments', label: 'Departments', icon: <Building2 className="w-4 h-4" /> },
+    { id: 'wards', label: 'Clinical Wards', icon: <Activity className="w-4 h-4" /> },
+    { id: 'resources', label: 'Resource Registry', icon: <Activity className="w-4 h-4" /> },
+    { id: 'equipment', label: 'Equipment Telemetry', icon: <Activity className="w-4 h-4" /> },
+    { id: 'requests', label: 'Resource Requests', icon: <ClipboardList className="w-4 h-4" /> },
+    { id: 'staff', label: 'Staff Verification', icon: <Users className="w-4 h-4" /> },
+    { id: 'reports', label: 'Readiness Reports', icon: <FileText className="w-4 h-4" /> },
+    { id: 'settings', label: 'Hospital Settings', icon: <Settings className="w-4 h-4" /> }
   ];
 
   const navItems = {
@@ -113,11 +121,40 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
           {role} Menu
         </div>
         {navItems.map(item => {
-          const isActive = currentTab === item.id;
+          const isActive = 
+            currentTab === item.id ||
+            (item.id === 'requests' && (currentTab === 'requests' || currentTab === 'resource-requests')) ||
+            (item.id === 'reports' && (currentTab === 'reports' || currentTab === 'readiness-reports')) ||
+            (item.id === 'beds' && (currentTab === 'beds' || currentTab === 'bed_readiness')) ||
+            (item.id === 'bed_readiness' && (currentTab === 'beds' || currentTab === 'bed_readiness'));
+
           return (
             <button
               key={item.id}
-              onClick={() => onSelectTab(item.id)}
+              onClick={() => {
+                onSelectTab(item.id);
+                if (item.id === 'beds' || item.id === 'bed_readiness') {
+                  window.location.hash = '#/hospital/beds';
+                } else if (item.id === 'wards') {
+                  window.location.hash = '#/hospital/wards';
+                } else if (item.id === 'departments') {
+                  window.location.hash = '#/hospital/departments';
+                } else if (item.id === 'resources') {
+                  window.location.hash = '#/hospital/resources';
+                } else if (item.id === 'equipment') {
+                  window.location.hash = '#/hospital/equipment';
+                } else if (item.id === 'staff') {
+                  window.location.hash = '#/hospital/staff';
+                } else if (item.id === 'requests' || item.id === 'resource-requests') {
+                  window.location.hash = '#/hospital/resource-requests';
+                } else if (item.id === 'reports' || item.id === 'readiness-reports') {
+                  window.location.hash = '#/hospital/readiness-reports';
+                } else if (item.id === 'settings') {
+                  window.location.hash = '#/hospital/settings';
+                } else if (item.id === 'dashboard') {
+                  window.location.hash = '#/hospital/overview';
+                }
+              }}
               className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
                 isActive
                   ? 'bg-blue-50 text-[#2563A6] font-bold'

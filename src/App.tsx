@@ -251,9 +251,42 @@ export const AppContent: React.FC = () => {
     );
   }
 
-  // Hospital Dashboard Route (Directly entered after Register Hospital)
-  if (currentPath === '/hospital-dashboard') {
-    return <HospitalDashboard />;
+  // Hospital Dashboard Routes (Directly entered after Register Hospital or via Bed Management / Wards navigation)
+  if (
+    currentPath === '/hospital-dashboard' || 
+    currentPath === '/hospital/beds' || 
+    currentPath === '/hospital/wards' || 
+    currentPath === '/hospital/departments' || 
+    currentPath === '/hospital/resources' || 
+    currentPath === '/hospital/equipment' || 
+    currentPath === '/hospital/staff' || 
+    currentPath === '/hospital/requests' || 
+    currentPath === '/hospital/resource-requests' || 
+    currentPath === '/hospital/reports' || 
+    currentPath === '/hospital/readiness-reports' || 
+    currentPath === '/hospital/settings' || 
+    currentPath === '/hospital/overview'
+  ) {
+    const initialTab = currentPath === '/hospital/beds' 
+      ? 'beds' 
+      : currentPath === '/hospital/wards' 
+      ? 'wards' 
+      : currentPath === '/hospital/departments'
+      ? 'departments'
+      : currentPath === '/hospital/resources'
+      ? 'resources'
+      : currentPath === '/hospital/equipment'
+      ? 'equipment'
+      : currentPath === '/hospital/staff'
+      ? 'staff'
+      : (currentPath === '/hospital/requests' || currentPath === '/hospital/resource-requests')
+      ? 'requests'
+      : (currentPath === '/hospital/reports' || currentPath === '/hospital/readiness-reports')
+      ? 'reports'
+      : currentPath === '/hospital/settings'
+      ? 'settings'
+      : 'dashboard';
+    return <HospitalDashboard initialTab={initialTab} />;
   }
 
   // Step 4: Role Selection
@@ -311,8 +344,29 @@ export const AppContent: React.FC = () => {
     );
   }
 
-  // Step 7: Role-Based Dashboard (handles /dashboard and /dashboard/:role)
-  if (currentPath === '/dashboard' || currentPath.startsWith('/dashboard/')) {
+  // Step 7: Role-Based Dashboard (handles /dashboard, /dashboard/:role, /hospital/beds, /hospital/wards, /hospital/departments, /hospital/resources, /hospital/equipment, and /hospital/staff)
+  const isHospitalBedsRoute = currentPath === '/hospital/beds' || currentPath === '/dashboard/beds';
+  const isHospitalWardsRoute = currentPath === '/hospital/wards' || currentPath === '/dashboard/wards';
+  const isHospitalDepartmentsRoute = currentPath === '/hospital/departments' || currentPath === '/dashboard/departments';
+  const isHospitalResourcesRoute = currentPath === '/hospital/resources' || currentPath === '/dashboard/resources';
+  const isHospitalEquipmentRoute = currentPath === '/hospital/equipment' || currentPath === '/dashboard/equipment';
+  const isHospitalStaffRoute = currentPath === '/hospital/staff' || currentPath === '/dashboard/staff';
+  const isHospitalRequestsRoute = 
+    currentPath === '/hospital/resource-requests' || 
+    currentPath === '/hospital/requests' || 
+    currentPath === '/dashboard/resource-requests' || 
+    currentPath === '/dashboard/requests';
+  const isHospitalReportsRoute = 
+    currentPath === '/hospital/readiness-reports' || 
+    currentPath === '/hospital/reports' || 
+    currentPath === '/dashboard/readiness-reports' || 
+    currentPath === '/dashboard/reports';
+  const isHospitalSettingsRoute = currentPath === '/hospital/settings' || currentPath === '/dashboard/settings';
+  const isDashboardRoute = currentPath === '/dashboard' || 
+                           currentPath.startsWith('/dashboard/') || 
+                           currentPath.startsWith('/hospital/');
+
+  if (isDashboardRoute) {
     // Check if user is approved for dashboard access
     if (!user.isOnboarded || user.roleVerificationStatus !== 'approved') {
       // Prevent unauthorized dashboard access
@@ -334,22 +388,69 @@ export const AppContent: React.FC = () => {
       ? urlRole
       : (user.role || 'admin');
 
+    const effectiveTab = isHospitalBedsRoute 
+      ? 'beds' 
+      : isHospitalWardsRoute 
+      ? 'wards' 
+      : isHospitalDepartmentsRoute 
+      ? 'departments' 
+      : isHospitalResourcesRoute 
+      ? 'resources' 
+      : isHospitalEquipmentRoute 
+      ? 'equipment' 
+      : isHospitalStaffRoute 
+      ? 'staff' 
+      : isHospitalRequestsRoute
+      ? 'requests'
+      : isHospitalReportsRoute
+      ? 'reports'
+      : isHospitalSettingsRoute
+      ? 'settings'
+      : currentTab;
+
     const renderDashboardByRole = () => {
       switch (activeRole) {
         case 'admin':
-          return <AdminDashboard activeTab={currentTab} />;
+          return <AdminDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
         case 'doctor':
-          return <DoctorDashboard activeTab={currentTab} />;
+          return <DoctorDashboard activeTab={effectiveTab} />;
         case 'nurse':
-          return <NurseDashboard activeTab={currentTab} />;
+          return <NurseDashboard activeTab={effectiveTab} />;
         case 'patient':
-          return <PatientDashboard activeTab={currentTab} />;
+          return <PatientDashboard activeTab={effectiveTab} />;
         default:
-          return <AdminDashboard activeTab={currentTab} />;
+          return <AdminDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
       }
     };
 
     const getDashboardSubtitle = () => {
+      if (effectiveTab === 'beds') {
+        return 'Monitor bed availability, occupancy, and operational readiness across hospital wards.';
+      }
+      if (effectiveTab === 'wards') {
+        return 'Monitor ward capacity, patient occupancy, bed readiness, and clinical staff assignments.';
+      }
+      if (effectiveTab === 'departments') {
+        return 'Specialty clinical divisions, ward mappings, physician heads, and institutional bed capacities.';
+      }
+      if (effectiveTab === 'resources') {
+        return 'Institutional equipment, pharmaceutical reserves, and critical healthcare resources catalog.';
+      }
+      if (effectiveTab === 'equipment') {
+        return 'Real-time telemetry, operational status, biomedical calibration, and device maintenance tracking.';
+      }
+      if (effectiveTab === 'staff') {
+        return 'Review staff credentials, verify professional details, and manage hospital role access.';
+      }
+      if (effectiveTab === 'requests' || effectiveTab === 'resource-requests') {
+        return 'Review clinical requisitions, manage department allocations, and coordinate resource fulfillment.';
+      }
+      if (effectiveTab === 'reports' || effectiveTab === 'readiness-reports') {
+        return 'Hospital readiness intelligence, bed availability metrics, telemetry diagnostics, and operational blockers.';
+      }
+      if (effectiveTab === 'settings') {
+        return 'Institutional credentials, resource threshold parameters, alert rules, and administrative preferences.';
+      }
       switch (activeRole) {
         case 'admin':
           return 'Hospital command center — Live bed control, staff authorization, and equipment allocation';
@@ -368,8 +469,31 @@ export const AppContent: React.FC = () => {
       <div className="min-h-screen bg-[#F5F7FA] flex text-[#1E293B]">
         {/* Fixed Left Sidebar */}
         <Sidebar 
-          currentTab={currentTab} 
-          onSelectTab={(tab) => setCurrentTab(tab)} 
+          currentTab={effectiveTab} 
+          onSelectTab={(tab) => {
+            setCurrentTab(tab);
+            if (tab === 'beds') {
+              navigateTo('/hospital/beds');
+            } else if (tab === 'wards') {
+              navigateTo('/hospital/wards');
+            } else if (tab === 'departments') {
+              navigateTo('/hospital/departments');
+            } else if (tab === 'resources') {
+              navigateTo('/hospital/resources');
+            } else if (tab === 'equipment') {
+              navigateTo('/hospital/equipment');
+            } else if (tab === 'staff') {
+              navigateTo('/hospital/staff');
+            } else if (tab === 'requests' || tab === 'resource-requests') {
+              navigateTo('/hospital/resource-requests');
+            } else if (tab === 'reports' || tab === 'readiness-reports') {
+              navigateTo('/hospital/readiness-reports');
+            } else if (tab === 'settings') {
+              navigateTo('/hospital/settings');
+            } else if (tab === 'dashboard') {
+              navigateTo('/hospital/overview');
+            }
+          }} 
           activeRole={activeRole}
         />
 
@@ -377,9 +501,27 @@ export const AppContent: React.FC = () => {
         <div className="flex-1 flex flex-col min-w-0">
           <Header 
             title={
-              currentTab === 'dashboard' 
+              effectiveTab === 'beds'
+                ? 'Bed Management'
+                : effectiveTab === 'wards'
+                ? 'Clinical Wards'
+                : effectiveTab === 'departments'
+                ? 'Departments'
+                : effectiveTab === 'resources'
+                ? 'Resource Registry'
+                : effectiveTab === 'equipment'
+                ? 'Equipment Telemetry'
+                : effectiveTab === 'staff'
+                ? 'Staff Verification'
+                : effectiveTab === 'requests' || effectiveTab === 'resource-requests'
+                ? 'Resource Requests'
+                : effectiveTab === 'reports' || effectiveTab === 'readiness-reports'
+                ? 'Readiness Reports'
+                : effectiveTab === 'settings'
+                ? 'Hospital Settings'
+                : effectiveTab === 'dashboard' 
                 ? `${activeRole.toUpperCase()} OVERVIEW` 
-                : currentTab.toUpperCase()
+                : effectiveTab.toUpperCase()
             } 
             subtitle={getDashboardSubtitle()} 
             activeRole={activeRole}

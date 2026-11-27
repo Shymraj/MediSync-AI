@@ -17,10 +17,23 @@ import { Header } from '../layout/Header';
 import { AdminDashboard } from '../dashboards/AdminDashboard';
 import { DoctorDashboard } from '../dashboards/DoctorDashboard';
 import { NurseDashboard } from '../dashboards/NurseDashboard';
+import { BedManagementPage } from '../dashboards/BedManagementPage';
+import { ClinicalWardsPage } from '../dashboards/ClinicalWardsPage';
+import { ResourceRegistryPage } from '../dashboards/ResourceRegistryPage';
+import { EquipmentTelemetryPage } from '../dashboards/EquipmentTelemetryPage';
+import { DepartmentsPage } from '../dashboards/DepartmentsPage';
+import { StaffVerificationPage } from '../dashboards/StaffVerificationPage';
+import { ResourceRequestsPage } from '../dashboards/ResourceRequestsPage';
+import { ReadinessReportsPage } from '../dashboards/ReadinessReportsPage';
+import { HospitalSettingsPage } from '../dashboards/HospitalSettingsPage';
 import { HospitalOverviewView } from './HospitalOverviewView';
 import { UserRole } from '../../types';
 
-export const HospitalDashboard: React.FC = () => {
+interface HospitalDashboardProps {
+  initialTab?: string;
+}
+
+export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab }) => {
   const { 
     user, 
     tempOnboarding
@@ -28,7 +41,50 @@ export const HospitalDashboard: React.FC = () => {
 
   // Active sub-portal within Hospital Dashboard: 'overview' (default) | 'doctor' | 'nurse' | 'admin'
   const [activeRole, setActiveRole] = useState<'overview' | 'doctor' | 'nurse' | 'admin'>('overview');
-  const [currentTab, setCurrentTab] = useState<string>('dashboard');
+  const [currentTab, setCurrentTab] = useState<string>(() => {
+    if (initialTab) return initialTab;
+    const hash = window.location.hash;
+    if (hash === '#/hospital/beds') return 'beds';
+    if (hash === '#/hospital/wards') return 'wards';
+    if (hash === '#/hospital/departments') return 'departments';
+    if (hash === '#/hospital/resources') return 'resources';
+    if (hash === '#/hospital/equipment') return 'equipment';
+    if (hash === '#/hospital/staff') return 'staff';
+    if (hash === '#/hospital/resource-requests' || hash === '#/hospital/requests') return 'requests';
+    if (hash === '#/hospital/readiness-reports' || hash === '#/hospital/reports') return 'reports';
+    if (hash === '#/hospital/settings') return 'settings';
+    return 'dashboard';
+  });
+
+  // Sync tab with URL hash
+  useEffect(() => {
+    const syncWithHash = () => {
+      const hash = window.location.hash;
+      if (hash === '#/hospital/beds') {
+        setCurrentTab('beds');
+      } else if (hash === '#/hospital/wards') {
+        setCurrentTab('wards');
+      } else if (hash === '#/hospital/departments') {
+        setCurrentTab('departments');
+      } else if (hash === '#/hospital/resources') {
+        setCurrentTab('resources');
+      } else if (hash === '#/hospital/equipment') {
+        setCurrentTab('equipment');
+      } else if (hash === '#/hospital/staff') {
+        setCurrentTab('staff');
+      } else if (hash === '#/hospital/resource-requests' || hash === '#/hospital/requests') {
+        setCurrentTab('requests');
+      } else if (hash === '#/hospital/readiness-reports' || hash === '#/hospital/reports') {
+        setCurrentTab('reports');
+      } else if (hash === '#/hospital/settings') {
+        setCurrentTab('settings');
+      } else if (hash === '#/hospital/overview' || hash === '#/hospital-dashboard') {
+        setCurrentTab('dashboard');
+      }
+    };
+    window.addEventListener('hashchange', syncWithHash);
+    return () => window.removeEventListener('hashchange', syncWithHash);
+  }, []);
 
   // Quick celebration banner if arriving right after registration
   const [showCelebration, setShowCelebration] = useState(() => {
@@ -92,6 +148,71 @@ export const HospitalDashboard: React.FC = () => {
   };
 
   const renderDashboardContent = () => {
+    // When Bed Master Status is selected in sidebar, render BedManagementPage
+    if (currentTab === 'beds') {
+      return <BedManagementPage onSelectTab={setCurrentTab} />;
+    }
+
+    // When Clinical Wards is selected in sidebar, render ClinicalWardsPage
+    if (currentTab === 'wards') {
+      return (
+        <ClinicalWardsPage 
+          onSelectTab={(tab, wardFilter) => {
+            setCurrentTab(tab);
+            if (tab === 'beds') {
+              window.location.hash = '#/hospital/beds';
+            } else if (tab === 'resources') {
+              window.location.hash = '#/hospital/resources';
+            } else if (tab === 'departments') {
+              window.location.hash = '#/hospital/departments';
+            }
+          }} 
+        />
+      );
+    }
+
+    // When Departments is selected in sidebar, render DepartmentsPage
+    if (currentTab === 'departments') {
+      return (
+        <DepartmentsPage 
+          onSelectTab={(tab) => {
+            setCurrentTab(tab);
+            window.location.hash = '#/hospital/' + tab;
+          }} 
+        />
+      );
+    }
+
+    // When Resource Registry is selected in sidebar, render ResourceRegistryPage
+    if (currentTab === 'resources') {
+      return <ResourceRegistryPage onSelectTab={setCurrentTab} />;
+    }
+
+    // When Equipment Telemetry is selected in sidebar, render EquipmentTelemetryPage
+    if (currentTab === 'equipment') {
+      return <EquipmentTelemetryPage onSelectTab={setCurrentTab} />;
+    }
+
+    // When Staff Verification is selected in sidebar, render StaffVerificationPage
+    if (currentTab === 'staff') {
+      return <StaffVerificationPage onSelectTab={setCurrentTab} />;
+    }
+
+    // When Resource Requests is selected in sidebar, render ResourceRequestsPage
+    if (currentTab === 'requests' || currentTab === 'resource-requests') {
+      return <ResourceRequestsPage onSelectTab={setCurrentTab} />;
+    }
+
+    // When Readiness Reports is selected in sidebar, render ReadinessReportsPage
+    if (currentTab === 'reports' || currentTab === 'readiness-reports') {
+      return <ReadinessReportsPage onSelectTab={setCurrentTab} />;
+    }
+
+    // When Hospital Settings is selected in sidebar, render HospitalSettingsPage
+    if (currentTab === 'settings') {
+      return <HospitalSettingsPage onSelectTab={setCurrentTab} />;
+    }
+
     switch (activeRole) {
       case 'overview':
         return (
@@ -106,7 +227,7 @@ export const HospitalDashboard: React.FC = () => {
       case 'nurse':
         return <NurseDashboard activeTab={currentTab} />;
       case 'admin':
-        return <AdminDashboard activeTab={currentTab} />;
+        return <AdminDashboard activeTab={currentTab} onSelectTab={setCurrentTab} />;
       default:
         return (
           <HospitalOverviewView 
@@ -119,6 +240,33 @@ export const HospitalDashboard: React.FC = () => {
   };
 
   const getRoleSubtitle = () => {
+    if (currentTab === 'beds') {
+      return 'Monitor bed availability, occupancy, and operational readiness across hospital wards.';
+    }
+    if (currentTab === 'wards') {
+      return 'Monitor ward capacity, patient occupancy, bed readiness, and clinical staff assignments.';
+    }
+    if (currentTab === 'departments') {
+      return 'Specialty clinical divisions, ward mappings, physician heads, and institutional bed capacities.';
+    }
+    if (currentTab === 'resources') {
+      return 'Institutional equipment, pharmaceutical reserves, and critical healthcare resources catalog.';
+    }
+    if (currentTab === 'equipment') {
+      return 'Real-time telemetry, operational status, biomedical calibration, and device maintenance tracking.';
+    }
+    if (currentTab === 'staff') {
+      return 'Review staff credentials, verify professional details, and manage hospital role access.';
+    }
+    if (currentTab === 'requests' || currentTab === 'resource-requests') {
+      return 'Review clinical requisitions, manage department allocations, and coordinate resource fulfillment.';
+    }
+    if (currentTab === 'reports' || currentTab === 'readiness-reports') {
+      return 'Hospital readiness intelligence, bed availability metrics, telemetry diagnostics, and operational blockers.';
+    }
+    if (currentTab === 'settings') {
+      return 'Institutional credentials, resource threshold parameters, alert rules, and administrative preferences.';
+    }
     switch (activeRole) {
       case 'overview':
         return 'Institutional facility command & operations overview';
@@ -142,7 +290,30 @@ export const HospitalDashboard: React.FC = () => {
       */}
       <Sidebar 
         currentTab={currentTab}
-        onSelectTab={(tab) => setCurrentTab(tab)}
+        onSelectTab={(tab) => {
+          setCurrentTab(tab);
+          if (tab === 'beds') {
+            window.location.hash = '#/hospital/beds';
+          } else if (tab === 'wards') {
+            window.location.hash = '#/hospital/wards';
+          } else if (tab === 'departments') {
+            window.location.hash = '#/hospital/departments';
+          } else if (tab === 'resources') {
+            window.location.hash = '#/hospital/resources';
+          } else if (tab === 'equipment') {
+            window.location.hash = '#/hospital/equipment';
+          } else if (tab === 'staff') {
+            window.location.hash = '#/hospital/staff';
+          } else if (tab === 'requests' || tab === 'resource-requests') {
+            window.location.hash = '#/hospital/resource-requests';
+          } else if (tab === 'reports' || tab === 'readiness-reports') {
+            window.location.hash = '#/hospital/readiness-reports';
+          } else if (tab === 'settings') {
+            window.location.hash = '#/hospital/settings';
+          } else if (tab === 'dashboard') {
+            window.location.hash = '#/hospital/overview';
+          }
+        }}
         activeRole={activeRole as UserRole}
       />
 
@@ -155,7 +326,25 @@ export const HospitalDashboard: React.FC = () => {
       <div className="flex-1 flex flex-col min-w-0">
         <Header 
           title={
-            activeRole === 'overview'
+            currentTab === 'beds'
+              ? 'Bed Management'
+              : currentTab === 'wards'
+              ? 'Clinical Wards'
+              : currentTab === 'departments'
+              ? 'Departments'
+              : currentTab === 'resources'
+              ? 'Resource Registry'
+              : currentTab === 'equipment'
+              ? 'Equipment Telemetry'
+              : currentTab === 'staff'
+              ? 'Staff Verification'
+              : currentTab === 'requests' || currentTab === 'resource-requests'
+              ? 'Resource Requests'
+              : currentTab === 'reports' || currentTab === 'readiness-reports'
+              ? 'Readiness Reports'
+              : currentTab === 'settings'
+              ? 'Hospital Settings'
+              : activeRole === 'overview'
               ? 'HOSPITAL DASHBOARD'
               : currentTab === 'dashboard' 
               ? `${activeRole.toUpperCase()} OVERVIEW` 
