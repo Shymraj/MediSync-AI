@@ -362,19 +362,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   key={item.id}
                   onClick={() => {
                     onSelectTab(item.id);
-<<<<<<< Updated upstream
                     if (role === 'patient') {
                       if (item.id === 'find_hospitals') {
                         window.location.hash = '#/patient-dashboard';
                       }
                       return;
                     }
-                    if (item.id === 'beds' || item.id === 'bed_readiness') {
-=======
                     if (role === 'nurse') {
                       window.location.hash = `#/dashboard/nurse?tab=${item.id}`;
                     } else if (item.id === 'beds' || item.id === 'bed_readiness') {
->>>>>>> Stashed changes
                       window.location.hash = '#/hospital/beds';
                     } else if (item.id === 'wards') {
                       window.location.hash = '#/hospital/wards';

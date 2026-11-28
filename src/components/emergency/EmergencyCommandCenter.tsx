@@ -135,11 +135,7 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
   // Fetch from backend API
   const fetchIncidentsAndAnalytics = async () => {
     try {
-<<<<<<< Updated upstream
-      const data = await api.getEmergencyIncidents(getActiveHospitalScopeId());
-=======
-      const data = await api.getEmergencyIncidents('hosp-chn-01', isDemoModeActive);
->>>>>>> Stashed changes
+      const data = await api.getEmergencyIncidents(getActiveHospitalScopeId(), isDemoModeActive);
       if (Array.isArray(data) && data.length > 0) {
         setIncidents(data);
         localStorage.setItem(hospitalScopedKey('medisync_emergency_incidents_cache'), JSON.stringify(data));

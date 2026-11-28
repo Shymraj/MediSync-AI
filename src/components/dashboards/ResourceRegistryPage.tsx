@@ -232,13 +232,6 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
   // Handle Refresh
   const handleRefresh = () => {
     setIsRefreshing(true);
-<<<<<<< Updated upstream
-    setTimeout(() => {
-      try {
-        const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
-        if (saved) {
-          setResources(JSON.parse(saved));
-=======
     api.getResources()
       .then((data: any) => {
         if (Array.isArray(data) && data.length > 0) {
@@ -257,10 +250,27 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
           }));
           setResources(mapped);
           saveResources(mapped);
->>>>>>> Stashed changes
+        } else {
+          try {
+            const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
+            if (saved) {
+              setResources(JSON.parse(saved));
+            }
+          } catch (e) {
+            console.error('Failed to parse cached resources:', e);
+          }
         }
       })
-      .catch(() => {})
+      .catch(() => {
+        try {
+          const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
+          if (saved) {
+            setResources(JSON.parse(saved));
+          }
+        } catch (e) {
+          console.error('Failed to parse cached resources:', e);
+        }
+      })
       .finally(() => {
         const now = new Date();
         setLastRefreshedTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
