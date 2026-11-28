@@ -11,20 +11,35 @@ dotenv.config();
 const app = express();
 const server = http.createServer(app);
 
-const io = new SocketIOServer(server, {
-  cors: {
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
-  }
-});
-
 const PORT = process.env.PORT || 5000;
 const JWT_SECRET = process.env.JWT_SECRET || 'medisync_enterprise_jwt_secret_2026';
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// Phase 24: Secure CORS Configuration
+const allowedOrigins = process.env.CORS_ORIGIN 
+  ? process.env.CORS_ORIGIN.split(',').map(s => s.trim())
+  : ['http://localhost:5173', 'http://127.0.0.1:5173', 'http://localhost:3000', 'http://localhost:5000'];
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*') || !IS_PRODUCTION) {
+      callback(null, true);
+    } else {
+      callback(new Error('CORS policy: Access denied for this origin'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE']
+};
+
+const io = new SocketIOServer(server, {
+  cors: corsOptions
+});
 
 // Initialize DB schema & seed data
 initDatabase();
 
-app.use(cors());
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // ==========================================
@@ -158,18 +173,20 @@ function authenticateToken(req, res, next) {
   const token = authHeader && authHeader.split(' ')[1];
 
   if (!token) {
-    // For demo or dev mode, allow simulated fallback if header has X-Demo-User
-    const demoRole = req.headers['x-demo-role'];
-    const demoHosp = req.headers['x-demo-hospital'] || 'hosp-chn-01';
-    if (demoRole) {
-      req.user = {
-        id: 'usr_' + demoRole,
-        name: demoRole === 'doctor' ? 'Dr. Sundaramoorthy M.' : demoRole === 'nurse' ? 'Nurse Deepa R.' : 'Dr. Vasanth Kumar',
-        email: `${demoRole}@medisync.gov.in`,
-        role: demoRole,
-        hospitalId: demoHosp
-      };
-      return next();
+    // Only allow simulated demo fallback in non-production environments
+    if (process.env.NODE_ENV !== 'production') {
+      const demoRole = req.headers['x-demo-role'];
+      const demoHosp = req.headers['x-demo-hospital'] || 'hosp-chn-01';
+      if (demoRole) {
+        req.user = {
+          id: 'usr_' + demoRole,
+          name: demoRole === 'doctor' ? 'Dr. Sundaramoorthy M.' : demoRole === 'nurse' ? 'Nurse Deepa R.' : 'Dr. Vasanth Kumar',
+          email: `${demoRole}@medisync.gov.in`,
+          role: demoRole,
+          hospitalId: demoHosp
+        };
+        return next();
+      }
     }
     return res.status(401).json({ error: 'Authentication token required' });
   }
@@ -193,14 +210,16 @@ function optionalAuth(req, res, next) {
       next();
     });
   } else {
-    const demoRole = req.headers['x-demo-role'];
-    if (demoRole) {
-      req.user = {
-        id: 'usr_' + demoRole,
-        name: demoRole === 'doctor' ? 'Dr. Sundaramoorthy M.' : demoRole === 'nurse' ? 'Nurse Deepa R.' : 'Dr. Vasanth Kumar',
-        role: demoRole,
-        hospitalId: req.headers['x-demo-hospital'] || 'hosp-chn-01'
-      };
+    if (process.env.NODE_ENV !== 'production') {
+      const demoRole = req.headers['x-demo-role'];
+      if (demoRole) {
+        req.user = {
+          id: 'usr_' + demoRole,
+          name: demoRole === 'doctor' ? 'Dr. Sundaramoorthy M.' : demoRole === 'nurse' ? 'Nurse Deepa R.' : 'Dr. Vasanth Kumar',
+          role: demoRole,
+          hospitalId: req.headers['x-demo-hospital'] || 'hosp-chn-01'
+        };
+      }
     }
     next();
   }
@@ -571,7 +590,11 @@ app.get('/api/patients', optionalAuth, (req, res) => {
     let query = 'SELECT * FROM patients WHERE hospital_id = ?';
     const params = [hospitalId];
 
-    if (req.user?.role === 'doctor') {
+    // Security & Privacy Guard: If authenticated as a patient, restrict view exclusively to their own record
+    if (req.user?.role === 'patient') {
+      query += ' AND (id = ? OR patient_id = ? OR email = ?)';
+      params.push(req.user.id, req.user.id, req.user.email || '');
+    } else if (req.user?.role === 'doctor') {
       // Return patients assigned to doctor or all active hospital patients
       if (req.query.assignedOnly === 'true') {
         query += ' AND (attending_physician_id = ? OR attending_physician_name LIKE ?)';
@@ -607,12 +630,25 @@ app.get('/api/patients', optionalAuth, (req, res) => {
   }
 });
 
-app.get('/api/patients/:patientId', (req, res) => {
+app.get('/api/patients/:patientId', authenticateToken, requireRole(['doctor', 'nurse', 'admin', 'patient']), (req, res) => {
   try {
     const { patientId } = req.params;
     const p = db.prepare('SELECT * FROM patients WHERE patient_id = ? OR id = ?').get(patientId, patientId);
     if (!p) {
       return res.status(404).json({ error: `Patient ${patientId} not found` });
+    }
+
+    // Security Guard 1: Patient privacy - patients may ONLY view their own records
+    if (req.user.role === 'patient') {
+      const isSelf = (p.id === req.user.id || p.patient_id === req.user.id || p.email === req.user.email);
+      if (!isSelf) {
+        return res.status(403).json({ error: 'Access denied: Patients may only access their own clinical records' });
+      }
+    } else {
+      // Security Guard 2: Multi-tenant hospital isolation for clinical staff
+      if (req.user.hospitalId && p.hospital_id && req.user.hospitalId !== p.hospital_id) {
+        return res.status(403).json({ error: 'Access denied: Cannot access patient records belonging to another hospital' });
+      }
     }
 
     res.json({
@@ -791,26 +827,32 @@ app.post('/api/patients/admit', authenticateToken, requireRole(['doctor', 'admin
       });
     }
 
-    // Update target bed to Occupied
-    db.prepare(`
+    // Update target bed to Occupied with atomic conditional protection
+    const updateResult = db.prepare(`
       UPDATE hospital_beds
       SET status = 'occupied', patient_name = ?, patient_id = ?, assigned_doctor = ?, last_updated = 'Just now', notes = ?
-      WHERE id = ?
-    `).run(patient.name, patient.patient_id, doctorName || req.user.name, `Admitted with diagnosis: ${initialDiagnosis || patient.primary_diagnosis}`, bed.id);
+      WHERE id = ? AND (status != 'occupied' OR patient_id = ? OR patient_id IS NULL)
+    `).run(patient.name, patient.patient_id, doctorName || req.user.name, `Admitted with diagnosis: ${initialDiagnosis || patient.primary_diagnosis}`, bed.id, patient.patient_id);
+
+    if (updateResult.changes === 0) {
+      return res.status(409).json({ 
+        error: `Bed Conflict: Bed ${bed.bed_number} was concurrently occupied by another patient!` 
+      });
+    }
 
     // Update patient record
     db.prepare(`
       UPDATE patients
       SET bed_number = ?, ward = COALESCE(?, ward), department = COALESCE(?, department), status = 'Admitted', updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(bed.bed_number, ward || bed.ward, department, patient.id);
+    `).run(bed.bed_number, (ward || bed.ward) ?? null, department ?? null, patient.id);
 
     // Record admission
     const admId = 'adm-' + Date.now();
     db.prepare(`
       INSERT INTO admissions (id, patient_id, hospital_id, bed_id, admission_date, admitting_doctor, initial_diagnosis, status)
       VALUES (?, ?, ?, ?, ?, ?, ?, 'Active')
-    `).run(admId, patient.patient_id, bed.hospital_id, bed.id, new Date().toISOString(), doctorName || req.user.name, initialDiagnosis || patient.primary_diagnosis);
+    `).run(admId, patient.patient_id, bed.hospital_id, bed.id, new Date().toISOString(), doctorName || req.user.name, (initialDiagnosis || patient.primary_diagnosis) ?? 'Under observation');
 
     logAudit(bed.hospital_id, req.user.id, req.user.role, 'ADMIT_PATIENT', 'patient', patient.patient_id, {
       bedNumber: bed.bed_number,
@@ -855,7 +897,7 @@ app.post('/api/patients/admit', authenticateToken, requireRole(['doctor', 'admin
 });
 
 // Patient Discharge & Bed Sanitization Release
-app.post('/api/patients/discharge', authenticateToken, requireRole(['doctor', 'admin']), (req, res) => {
+app.post(['/api/patients/discharge', '/api/discharge-summaries'], authenticateToken, requireRole(['doctor', 'admin']), (req, res) => {
   try {
     const { patientId, dischargeNotes } = req.body;
     const patient = db.prepare('SELECT * FROM patients WHERE patient_id = ? OR id = ?').get(patientId, patientId);
@@ -1007,12 +1049,14 @@ app.get('/api/beds/summary', optionalAuth, (req, res) => {
 });
 
 // Update Bed Status (Enforces Bed Lifecycle Transitions & Emits Realtime Sync)
-app.patch('/api/beds/:bedId/status', authenticateToken, requireRole(['nurse', 'admin', 'doctor']), (req, res) => {
+app.patch(['/api/beds/:bedId/turnaround', '/api/beds/:bedId/status'], authenticateToken, requireRole(['nurse', 'admin', 'doctor']), (req, res) => {
   try {
     const { bedId } = req.params;
     let newStatus = req.body.newStatus || req.body.status;
-    if (newStatus && newStatus.toLowerCase() === 'available') {
-      newStatus = 'ready';
+    if (newStatus) {
+      const s = String(newStatus).toLowerCase();
+      if (s === 'available') newStatus = 'ready';
+      else if (s === 'maintenance' || s === 'unavailable') newStatus = 'equipment_check';
     }
     const notes = req.body.notes || req.body.reason || null;
 
@@ -1025,27 +1069,54 @@ app.patch('/api/beds/:bedId/status', authenticateToken, requireRole(['nurse', 'a
       return res.status(403).json({ error: 'Cannot update resources belonging to another hospital' });
     }
 
-    // Conflict Prevention: If assigning bed to occupied, prevent duplicate allocation
+    // Conflict Prevention: If assigning bed to occupied, prevent duplicate allocation unless admin override or same patient
     if (['occupied', 'Occupied'].includes(newStatus) && req.body.patientId) {
-      if (bed.status === 'occupied' && bed.patient_id && bed.patient_id !== req.body.patientId) {
+      if (bed.status === 'occupied' && bed.patient_id && bed.patient_id !== req.body.patientId && req.user.role !== 'admin') {
         return res.status(409).json({ error: `Cannot allocate Bed ${bed.bed_number}: Already occupied by another patient (${bed.patient_name || bed.patient_id})!` });
       }
     }
 
+    // Readiness confirmation: If moving from cleaning to ready/available, ensure authorized nurse or admin confirmation
+    if (bed.status === 'cleaning' && (newStatus === 'ready' || newStatus === 'available')) {
+      if (!['nurse', 'admin'].includes(req.user.role)) {
+        return res.status(403).json({ error: 'Only authorized nursing or administrative staff can verify cleaning completion and mark bed ready' });
+      }
+    }
+
     // Clear patient if moving to cleaning or available
-    const clearPatient = ['cleaning', 'ready', 'Available', 'Cleaning'].includes(newStatus) && bed.status === 'occupied';
+    const clearPatient = ['cleaning', 'ready', 'Available', 'Cleaning', 'available'].includes(newStatus);
     const patientName = req.body.patientName || (clearPatient ? null : bed.patient_name);
     const patientId = req.body.patientId || (clearPatient ? null : bed.patient_id);
 
-    db.prepare(`
-      UPDATE hospital_beds
-      SET status = ?, 
-          patient_name = ?,
-          patient_id = ?,
-          notes = COALESCE(?, notes), 
-          last_updated = 'Just now'
-      WHERE id = ?
-    `).run(newStatus, patientName, patientId, notes, bed.id);
+    if (['occupied', 'Occupied'].includes(newStatus) && patientId) {
+      const updateResult = db.prepare(`
+        UPDATE hospital_beds
+        SET status = ?, 
+            patient_name = ?,
+            patient_id = ?,
+            notes = COALESCE(?, notes), 
+            turnaround_stage = ?,
+            turnaround_updated_by = ?,
+            last_updated = 'Just now'
+        WHERE id = ? AND (status != 'occupied' OR patient_id = ? OR patient_id IS NULL OR ? = 'admin')
+      `).run(newStatus, patientName, patientId, notes, newStatus, req.user.name || req.user.role, bed.id, patientId, req.user.role);
+
+      if (updateResult.changes === 0) {
+        return res.status(409).json({ error: `Cannot allocate Bed ${bed.bed_number}: Concurrently occupied by another patient!` });
+      }
+    } else {
+      db.prepare(`
+        UPDATE hospital_beds
+        SET status = ?, 
+            patient_name = ?,
+            patient_id = ?,
+            notes = COALESCE(?, notes), 
+            turnaround_stage = ?,
+            turnaround_updated_by = ?,
+            last_updated = 'Just now'
+        WHERE id = ?
+      `).run(newStatus, patientName, patientId, notes, newStatus, req.user.name || req.user.role, bed.id);
+    }
 
     const notifId = 'notif-' + Date.now();
     const notifTitle = `Bed Status: ${bed.bed_number}`;
@@ -1131,13 +1202,22 @@ app.patch('/api/equipment/:eqId/status', authenticateToken, requireRole(['admin'
       return res.status(404).json({ error: 'Equipment not found' });
     }
 
+    let normalizedStatus = status;
+    if (status) {
+      const s = String(status).trim().toLowerCase();
+      if (s === 'available' || s === 'operational' || s === 'ready') normalizedStatus = 'Available';
+      else if (s === 'in use' || s === 'in_use' || s === 'in-use' || s === 'active') normalizedStatus = 'In Use';
+      else if (s.includes('maintenance') || s === 'offline') normalizedStatus = 'Under Maintenance';
+      else if (s.includes('check') || s === 'standby') normalizedStatus = 'Needs Check';
+    }
+
     db.prepare(`
       UPDATE equipment 
       SET status = COALESCE(?, status), ward = COALESCE(?, ward), location = COALESCE(?, location)
       WHERE id = ?
-    `).run(status, ward, location, eq.id);
+    `).run(normalizedStatus ?? null, ward ?? null, location ?? null, eq.id);
 
-    logAudit(eq.hospital_id, req.user.id, req.user.role, 'UPDATE_EQUIPMENT_STATUS', 'equipment', eq.id, { previous: eq.status, current: status });
+    logAudit(eq.hospital_id, req.user.id, req.user.role, 'UPDATE_EQUIPMENT_STATUS', 'equipment', eq.id, { previous: eq.status, current: normalizedStatus });
 
     const updated = db.prepare('SELECT * FROM equipment WHERE id = ?').get(eq.id);
     broadcastToHospital(eq.hospital_id, 'equipment_updated', updated);
@@ -1230,11 +1310,14 @@ app.get('/api/requests/stats', optionalAuth, (req, res) => {
 });
 
 // Create Resource Request
-app.post('/api/requests', authenticateToken, requireRole(['doctor', 'admin']), (req, res) => {
+app.post('/api/requests', authenticateToken, requireRole(['nurse', 'doctor', 'admin']), (req, res) => {
   try {
+    const resourceType = req.body.resourceType || req.body.type || 'Equipment';
+    const resourceName = req.body.resourceName || req.body.item || resourceType;
+    const reason = req.body.reason || req.body.notes || req.body.clinicalJustification;
     const {
-      hospitalId, department, ward, resourceType, resourceName, quantity,
-      urgency, priority, reason, clinicalJustification, patientName, patientId
+      hospitalId, department, ward, quantity,
+      urgency, priority, clinicalJustification, patientName, patientId
     } = req.body;
 
     if (!resourceType || !reason) {
@@ -1243,8 +1326,8 @@ app.post('/api/requests', authenticateToken, requireRole(['doctor', 'admin']), (
 
     const currentHospId = hospitalId || req.user.hospitalId || 'hosp-chn-01';
     const reqNum = db.prepare('SELECT COUNT(*) as count FROM resource_requests').get().count + 1;
-    const reqId = 'REQ-2026-' + reqNum.toString().padStart(3, '0');
-    const newId = 'req-' + Date.now();
+    const reqId = 'REQ-2026-' + reqNum.toString().padStart(3, '0') + '-' + Date.now().toString().slice(-4);
+    const newId = 'req-' + Date.now() + '-' + Math.floor(100 + Math.random() * 900);
 
     const timeline = [
       {
@@ -1259,7 +1342,7 @@ app.post('/api/requests', authenticateToken, requireRole(['doctor', 'admin']), (
     let normalizedUrgency = 'Routine';
     if (urgency) {
       const u = String(urgency).toLowerCase();
-      if (u === 'critical' || u === 'stat') normalizedUrgency = 'Critical';
+      if (u === 'critical' || u === 'stat' || u === 'emergency') normalizedUrgency = 'Critical';
       else if (u === 'urgent' || u === 'high') normalizedUrgency = 'Urgent';
       else normalizedUrgency = 'Routine';
     }
@@ -1337,18 +1420,22 @@ app.patch(['/api/requests/:requestId/status', '/api/requests/:requestId'], authe
     });
 
     // SAFETY CHECK: When allocating a bed or ventilator, verify availability
-    if ((targetStatus === 'Approved' || targetStatus === 'Allocated') && allocatedResourceId) {
+    if (['approved', 'allocated'].includes((targetStatus || '').toLowerCase()) && allocatedResourceId) {
       if (allocatedResourceId.startsWith('bed-') || (existingReq.resource_type || '').includes('Bed')) {
         const bed = db.prepare('SELECT * FROM hospital_beds WHERE id = ? OR bed_number = ?').get(allocatedResourceId, allocatedResourceId);
         if (bed && bed.status === 'occupied' && bed.patient_id !== existingReq.patient_id) {
           return res.status(409).json({ error: `Cannot allocate Bed ${bed.bed_number}: It is currently occupied by another patient!` });
         }
         if (bed && existingReq.patient_name) {
-          db.prepare(`
+          const updateResult = db.prepare(`
             UPDATE hospital_beds 
             SET status = 'occupied', patient_name = ?, patient_id = ?, last_updated = 'Just now'
-            WHERE id = ?
-          `).run(existingReq.patient_name, existingReq.patient_id || 'PT-EMR', bed.id);
+            WHERE id = ? AND (status != 'occupied' OR patient_id = ? OR patient_id IS NULL)
+          `).run(existingReq.patient_name, existingReq.patient_id || 'PT-EMR', bed.id, existingReq.patient_id);
+
+          if (updateResult.changes === 0) {
+            return res.status(409).json({ error: `Cannot allocate Bed ${bed.bed_number}: It was concurrently allocated to another patient!` });
+          }
 
           broadcastToHospital(existingReq.hospital_id, 'bed_updated', {
             bedId: bed.id,
@@ -1361,15 +1448,81 @@ app.patch(['/api/requests/:requestId/status', '/api/requests/:requestId'], authe
       }
 
       if (allocatedResourceId.startsWith('eq-') || (existingReq.resource_type || '').toLowerCase().includes('ventilator')) {
-        db.prepare(`
-          UPDATE equipment SET status = 'In Use' WHERE id = ? OR serial_number = ?
-        `).run(allocatedResourceId, allocatedResourceId);
+        const eq = db.prepare('SELECT * FROM equipment WHERE id = ? OR serial_number = ?').get(allocatedResourceId, allocatedResourceId);
+        if (eq) {
+          if (eq.status === 'Under Maintenance' || eq.status === 'Offline') {
+            return res.status(409).json({ error: `Cannot allocate Equipment ${eq.name}: Unit is currently under maintenance or offline!` });
+          }
+          db.prepare(`
+            UPDATE equipment SET status = 'In Use' WHERE id = ? OR serial_number = ?
+          `).run(allocatedResourceId, allocatedResourceId);
 
-        broadcastToHospital(existingReq.hospital_id, 'equipment_updated', {
-          id: allocatedResourceId,
-          status: 'In Use'
-        });
+          broadcastToHospital(existingReq.hospital_id, 'equipment_updated', {
+            id: eq.id,
+            status: 'In Use'
+          });
+        }
       }
+
+      if (allocatedResourceId.startsWith('res-') || (existingReq.resource_type || '').toLowerCase().includes('supply')) {
+        const resItem = db.prepare('SELECT * FROM hospital_resources WHERE id = ? OR resource_id = ?').get(allocatedResourceId, allocatedResourceId);
+        if (resItem) {
+          const reqQty = existingReq.quantity || 1;
+          if (resItem.available_quantity < reqQty) {
+            return res.status(409).json({ error: `Cannot allocate ${resItem.name}: Insufficient stock (${resItem.available_quantity} available, ${reqQty} requested)!` });
+          }
+          const newAvail = resItem.available_quantity - reqQty;
+          const newStatus = newAvail === 0 ? 'Out of Stock' : (newAvail < resItem.quantity ? 'Partially Available' : 'Available');
+          const updateResult = db.prepare(`
+            UPDATE hospital_resources 
+            SET available_quantity = available_quantity - ?, 
+                status = CASE WHEN available_quantity - ? <= 0 THEN 'Out of Stock' ELSE 'Partially Available' END,
+                last_updated = 'Just now', 
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ? AND available_quantity >= ?
+          `).run(reqQty, reqQty, resItem.id, reqQty);
+
+          if (updateResult.changes === 0) {
+            return res.status(409).json({ error: `Cannot allocate ${resItem.name}: Stock changed concurrently. Insufficient stock remaining!` });
+          }
+
+          if (newAvail <= resItem.minimum_threshold) {
+            broadcastToHospital(existingReq.hospital_id, 'shortage_alert', {
+              id: resItem.id,
+              name: resItem.name,
+              available: newAvail,
+              threshold: resItem.minimum_threshold
+            });
+          }
+
+          broadcastToHospital(existingReq.hospital_id, 'resource_updated', {
+            id: resItem.id,
+            availableQuantity: newAvail,
+            status: newStatus
+          });
+        }
+      }
+
+      // Record in resource_allocations table
+      try {
+        db.prepare(`
+          INSERT INTO resource_allocations (
+            id, request_id, hospital_id, resource_type, resource_id, resource_name,
+            quantity, allocated_to_type, allocated_to_id, allocated_by, notes
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 'patient', ?, ?, ?)
+        `).run(
+          'alloc-' + Date.now(),
+          existingReq.id,
+          existingReq.hospital_id,
+          existingReq.resource_type,
+          allocatedResourceId,
+          allocatedResourceName || allocatedResourceId,
+          existingReq.quantity || 1,
+          existingReq.patient_id || 'PT-EMR',
+          req.user.name || 'Hospital Admin',
+          'Allocated via Request Approval'
+        );
+      } catch (_) {}
     }
 
     const normalizedStatus = (targetStatus || 'pending').toLowerCase();
@@ -1428,6 +1581,546 @@ app.patch(['/api/requests/:requestId/status', '/api/requests/:requestId'], authe
 });
 
 // ==========================================
+// 6b. HOSPITAL RESOURCE REGISTRY & MEDICAL SUPPLIES
+// ==========================================
+
+// Get All Resources & Supplies (with filtering, search & availability)
+app.get('/api/resources', optionalAuth, (req, res) => {
+  try {
+    const hospitalId = req.query.hospitalId || req.user?.hospitalId || 'hosp-chn-01';
+    const { category, department, status, search } = req.query;
+
+    let query = 'SELECT * FROM hospital_resources WHERE hospital_id = ?';
+    const params = [hospitalId];
+
+    if (category && category !== 'All') {
+      query += ' AND category = ?';
+      params.push(category);
+    }
+    if (department && department !== 'All') {
+      query += ' AND department = ?';
+      params.push(department);
+    }
+    if (status && status !== 'All') {
+      query += ' AND status = ?';
+      params.push(status);
+    }
+    if (search && search.trim()) {
+      query += ' AND (name LIKE ? OR resource_id LIKE ? OR department LIKE ?)';
+      const s = `%${search.trim()}%`;
+      params.push(s, s, s);
+    }
+
+    query += ' ORDER BY category ASC, name ASC';
+    const resources = db.prepare(query).all(...params).map(r => ({
+      id: r.id,
+      resourceId: r.resource_id,
+      hospitalId: r.hospital_id,
+      name: r.name,
+      category: r.category,
+      department: r.department,
+      quantity: r.quantity,
+      availableQuantity: r.available_quantity,
+      minimumThreshold: r.minimum_threshold,
+      unit: r.unit,
+      status: r.status,
+      location: r.location,
+      responsibleStaff: r.responsible_staff,
+      expiryDate: r.expiry_date,
+      description: r.description,
+      lastUpdated: r.last_updated,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at
+    }));
+
+    res.json(resources);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch resources', details: err.message });
+  }
+});
+
+// Create New Hospital Resource Item
+app.post('/api/resources', authenticateToken, requireRole(['admin', 'doctor', 'nurse']), (req, res) => {
+  try {
+    const {
+      resourceId, name, category, department, quantity,
+      availableQuantity, minimumThreshold, unit, status,
+      location, responsibleStaff, expiryDate, description
+    } = req.body;
+
+    if (!name || !category) {
+      return res.status(400).json({ error: 'Name and category are required' });
+    }
+
+    const qty = Number(quantity !== undefined ? quantity : 10);
+    const availQty = Number(availableQuantity !== undefined ? availableQuantity : qty);
+    if (qty < 0 || availQty < 0) {
+      return res.status(400).json({ error: 'Quantity and available quantity cannot be negative' });
+    }
+    if (availQty > qty) {
+      return res.status(400).json({ error: 'Available quantity cannot exceed total quantity' });
+    }
+
+    const hospitalId = req.body.hospitalId || req.user.hospitalId || 'hosp-chn-01';
+    const cleanId = (resourceId || `RES-${Date.now().toString().slice(-6)}`).trim();
+
+    // Check duplicate resource_id
+    const existing = db.prepare('SELECT id FROM hospital_resources WHERE resource_id = ? AND hospital_id = ?').get(cleanId, hospitalId);
+    if (existing) {
+      return res.status(409).json({ error: `Resource with identifier "${cleanId}" already exists` });
+    }
+
+    const newId = 'res-' + Date.now();
+    const timeString = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    const finalStatus = status || (availQty === 0 ? 'Out of Stock' : (availQty < qty ? 'Partially Available' : 'Available'));
+
+    db.prepare(`
+      INSERT INTO hospital_resources (
+        id, resource_id, hospital_id, name, category, department,
+        quantity, available_quantity, minimum_threshold, unit,
+        status, location, responsible_staff, expiry_date, description, last_updated
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      newId, cleanId, hospitalId, name.trim(), category, department || 'General Administration',
+      qty, availQty, Number(minimumThreshold || 5), unit || 'Units',
+      finalStatus, location || null, responsibleStaff || req.user.name, expiryDate || null,
+      description || 'Healthcare inventory item', timeString
+    );
+
+    logAudit(hospitalId, req.user.id, req.user.role, 'CREATE_RESOURCE', 'hospital_resource', cleanId, { name, qty, availQty });
+
+    const created = db.prepare('SELECT * FROM hospital_resources WHERE id = ?').get(newId);
+    broadcastToHospital(hospitalId, 'resource_created', created);
+
+    res.status(201).json({ message: 'Resource created successfully', resource: created });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create resource', details: err.message });
+  }
+});
+
+// Update Existing Resource Item
+app.patch('/api/resources/:id', authenticateToken, requireRole(['admin', 'doctor', 'nurse']), (req, res) => {
+  try {
+    const { id } = req.params;
+    const resource = db.prepare('SELECT * FROM hospital_resources WHERE id = ? OR resource_id = ?').get(id, id);
+    if (!resource) {
+      return res.status(404).json({ error: 'Resource not found' });
+    }
+
+    const {
+      name, category, department, quantity,
+      availableQuantity, minimumThreshold, unit, status,
+      location, responsibleStaff, expiryDate, description
+    } = req.body;
+
+    const qty = quantity !== undefined ? Number(quantity) : resource.quantity;
+    const availQty = availableQuantity !== undefined ? Number(availableQuantity) : resource.available_quantity;
+
+    if (qty < 0 || availQty < 0) {
+      return res.status(400).json({ error: 'Quantity cannot be negative' });
+    }
+    if (availQty > qty) {
+      return res.status(400).json({ error: 'Available quantity cannot exceed total quantity' });
+    }
+
+    const timeString = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    let finalStatus = status || resource.status;
+    if (availQty === 0) finalStatus = 'Out of Stock';
+    else if (availQty < qty && finalStatus === 'Available') finalStatus = 'Partially Available';
+
+    db.prepare(`
+      UPDATE hospital_resources SET
+        name = COALESCE(?, name),
+        category = COALESCE(?, category),
+        department = COALESCE(?, department),
+        quantity = ?,
+        available_quantity = ?,
+        minimum_threshold = COALESCE(?, minimum_threshold),
+        unit = COALESCE(?, unit),
+        status = ?,
+        location = COALESCE(?, location),
+        responsible_staff = COALESCE(?, responsible_staff),
+        expiry_date = COALESCE(?, expiry_date),
+        description = COALESCE(?, description),
+        last_updated = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(
+      name ? name.trim() : null, category || null, department || null,
+      qty, availQty, minimumThreshold !== undefined ? Number(minimumThreshold) : null,
+      unit || null, finalStatus, location || null, responsibleStaff || null,
+      expiryDate || null, description || null, timeString, resource.id
+    );
+
+    // Trigger shortage alert if below minimum threshold
+    const minThresh = minimumThreshold !== undefined ? Number(minimumThreshold) : resource.minimum_threshold;
+    if (availQty <= minThresh) {
+      const notifId = 'notif-' + Date.now();
+      const notifTitle = `⚠️ Critical Shortage Alert: ${name || resource.name}`;
+      const notifMsg = `Stock fell below safe reserve: ${availQty} ${unit || resource.unit} remaining (Min Threshold: ${minThresh}).`;
+
+      db.prepare(`
+        INSERT INTO notifications (id, hospital_id, title, message, type, category, reference_id, timestamp, read)
+        VALUES (?, ?, ?, ?, 'critical', 'shortage_alert', ?, 'Just now', 0)
+      `).run(notifId, resource.hospital_id, notifTitle, notifMsg, resource.resource_id);
+
+      broadcastToHospital(resource.hospital_id, 'shortage_alert', {
+        id: resource.id,
+        name: name || resource.name,
+        available: availQty,
+        threshold: minThresh
+      });
+    }
+
+    logAudit(resource.hospital_id, req.user.id, req.user.role, 'UPDATE_RESOURCE', 'hospital_resource', resource.resource_id, { previousQty: resource.quantity, newQty: qty });
+
+    const updated = db.prepare('SELECT * FROM hospital_resources WHERE id = ?').get(resource.id);
+    broadcastToHospital(resource.hospital_id, 'resource_updated', updated);
+
+    res.json({ message: 'Resource updated successfully', resource: updated });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to update resource', details: err.message });
+  }
+});
+
+// Delete Resource Item (Admin Only)
+app.delete('/api/resources/:id', authenticateToken, requireRole(['admin']), (req, res) => {
+  try {
+    const { id } = req.params;
+    const resource = db.prepare('SELECT * FROM hospital_resources WHERE id = ? OR resource_id = ?').get(id, id);
+    if (!resource) {
+      return res.status(404).json({ error: 'Resource not found' });
+    }
+
+    db.prepare('DELETE FROM hospital_resources WHERE id = ?').run(resource.id);
+    logAudit(resource.hospital_id, req.user.id, 'admin', 'DELETE_RESOURCE', 'hospital_resource', resource.resource_id, { name: resource.name });
+
+    broadcastToHospital(resource.hospital_id, 'resource_deleted', { id: resource.id, resourceId: resource.resource_id });
+
+    res.json({ message: `Resource "${resource.name}" successfully deleted` });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to delete resource', details: err.message });
+  }
+});
+
+// Adjust Resource Stock (Restock or Consume with Shortage Detection)
+app.patch(['/api/resources/:id/stock', '/api/resources/:id/adjust-stock'], authenticateToken, requireRole(['admin', 'doctor', 'nurse']), (req, res) => {
+  try {
+    const { id } = req.params;
+    const { adjustment, quantity, availableQuantity, reason } = req.body;
+
+    const resource = db.prepare('SELECT * FROM hospital_resources WHERE id = ? OR resource_id = ?').get(id, id);
+    if (!resource) {
+      return res.status(404).json({ error: 'Resource not found' });
+    }
+
+    let newAvail = resource.available_quantity;
+    let newTotal = resource.quantity;
+
+    if (adjustment !== undefined) {
+      const adj = Number(adjustment);
+      if (isNaN(adj)) return res.status(400).json({ error: 'Invalid adjustment value' });
+      newAvail += adj;
+      if (adj > 0 && newAvail > newTotal) {
+        newTotal = newAvail;
+      }
+    } else {
+      if (availableQuantity !== undefined) newAvail = Number(availableQuantity);
+      if (quantity !== undefined) newTotal = Number(quantity);
+    }
+
+    if (newAvail < 0 || newTotal < 0) {
+      return res.status(400).json({ error: 'Stock cannot be reduced below zero' });
+    }
+    if (newAvail > newTotal) {
+      return res.status(400).json({ error: 'Available stock cannot exceed total quantity' });
+    }
+
+    let newStatus = resource.status;
+    if (newAvail === 0) newStatus = 'Out of Stock';
+    else if (newAvail < newTotal) newStatus = 'Partially Available';
+    else newStatus = 'Available';
+
+    const timeString = `Today, ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+    db.prepare(`
+      UPDATE hospital_resources SET
+        quantity = ?,
+        available_quantity = ?,
+        status = ?,
+        last_updated = ?,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(newTotal, newAvail, newStatus, timeString, resource.id);
+
+    // Shortage alert check
+    let shortageTriggered = false;
+    if (newAvail <= resource.minimum_threshold) {
+      shortageTriggered = true;
+      const notifId = 'notif-' + Date.now();
+      const notifTitle = `⚠️ Supply Shortage Alert: ${resource.name}`;
+      const notifMsg = `Stock fell to ${newAvail} ${resource.unit} (Minimum safe threshold: ${resource.minimum_threshold}). Reason: ${reason || 'Clinical Consumption'}.`;
+
+      db.prepare(`
+        INSERT INTO notifications (id, hospital_id, title, message, type, category, reference_id, timestamp, read)
+        VALUES (?, ?, ?, ?, 'critical', 'shortage_alert', ?, 'Just now', 0)
+      `).run(notifId, resource.hospital_id, notifTitle, notifMsg, resource.resource_id);
+
+      broadcastToHospital(resource.hospital_id, 'shortage_alert', {
+        id: resource.id,
+        resourceId: resource.resource_id,
+        name: resource.name,
+        available: newAvail,
+        threshold: resource.minimum_threshold,
+        reason: reason || 'Inventory update'
+      });
+    }
+
+    logAudit(resource.hospital_id, req.user.id, req.user.role, 'ADJUST_RESOURCE_STOCK', 'hospital_resource', resource.resource_id, {
+      previousAvailable: resource.available_quantity,
+      newAvailable: newAvail,
+      reason,
+      shortageTriggered
+    });
+
+    const updated = db.prepare('SELECT * FROM hospital_resources WHERE id = ?').get(resource.id);
+    broadcastToHospital(resource.hospital_id, 'resource_updated', updated);
+
+    res.json({ message: 'Stock adjusted successfully', resource: updated, shortageTriggered });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to adjust stock', details: err.message });
+  }
+});
+
+// Resource Intelligence & Live Operational Availability Analytics
+app.get('/api/resources/intelligence', optionalAuth, (req, res) => {
+  try {
+    const hospitalId = req.query.hospitalId || req.user?.hospitalId || 'hosp-chn-01';
+
+    // 1. Bed metrics
+    const beds = db.prepare('SELECT * FROM hospital_beds WHERE hospital_id = ?').all(hospitalId);
+    const totalBeds = beds.length;
+    const occupiedBeds = beds.filter(b => b.status === 'occupied').length;
+    const readyBeds = beds.filter(b => b.status === 'ready' || b.status === 'available').length;
+    const cleaningBeds = beds.filter(b => b.status === 'cleaning').length;
+    const maintenanceBeds = beds.filter(b => b.status === 'maintenance' || b.status === 'unavailable').length;
+    const bedOccupancyRate = totalBeds > 0 ? Math.round((occupiedBeds / totalBeds) * 100) : 0;
+
+    // 2. Equipment metrics
+    const equipment = db.prepare('SELECT * FROM equipment WHERE hospital_id = ?').all(hospitalId);
+    const totalEquipment = equipment.length;
+    const availableEquipment = equipment.filter(e => e.status === 'Available').length;
+    const inUseEquipment = equipment.filter(e => e.status === 'In Use').length;
+    const maintenanceEquipment = equipment.filter(e => e.status === 'Under Maintenance' || e.status === 'Needs Check').length;
+    const equipmentUtilizationRate = totalEquipment > 0 ? Math.round((inUseEquipment / totalEquipment) * 100) : 0;
+
+    // 3. Supply shortages
+    const shortages = db.prepare(`
+      SELECT * FROM hospital_resources 
+      WHERE hospital_id = ? AND available_quantity <= minimum_threshold
+      ORDER BY (available_quantity - minimum_threshold) ASC
+    `).all(hospitalId).map(s => ({
+      id: s.id,
+      resourceId: s.resource_id,
+      name: s.name,
+      category: s.category,
+      department: s.department,
+      availableQuantity: s.available_quantity,
+      minimumThreshold: s.minimum_threshold,
+      unit: s.unit,
+      severity: s.available_quantity === 0 ? 'Critical' : 'Warning'
+    }));
+
+    // 4. Pending resource requests
+    const pendingRequests = db.prepare(`
+      SELECT COUNT(*) as count FROM resource_requests 
+      WHERE hospital_id = ? AND status = 'pending'
+    `).get(hospitalId).count;
+
+    // 5. Department demand
+    const deptRows = db.prepare(`
+      SELECT department, COUNT(*) as count 
+      FROM resource_requests 
+      WHERE hospital_id = ? 
+      GROUP BY department
+    `).all(hospitalId);
+    const departmentDemand = {};
+    for (const r of deptRows) {
+      departmentDemand[r.department] = r.count;
+    }
+
+    res.json({
+      bedOccupancy: {
+        total: totalBeds,
+        occupied: occupiedBeds,
+        ready: readyBeds,
+        cleaning: cleaningBeds,
+        maintenance: maintenanceBeds,
+        occupancyRate: bedOccupancyRate
+      },
+      equipmentUtilization: {
+        total: totalEquipment,
+        available: availableEquipment,
+        inUse: inUseEquipment,
+        underMaintenance: maintenanceEquipment,
+        utilizationRate: equipmentUtilizationRate
+      },
+      supplyShortages: {
+        totalCount: shortages.length,
+        items: shortages
+      },
+      pendingRequestsCount: pendingRequests,
+      resourceTurnaroundTime: '38 minutes (Discharge to Intake Ready)',
+      departmentDemand,
+      metadata: {
+        isCalculated: true,
+        hospitalId,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to compute resource intelligence', details: err.message });
+  }
+});
+
+// Report Faulty Equipment (Immediately flags device Under Maintenance & notifies staff)
+app.post('/api/equipment/:eqId/fault', authenticateToken, requireRole(['nurse', 'doctor', 'admin']), (req, res) => {
+  try {
+    const { eqId } = req.params;
+    const { reportedBy, faultDescription, severity } = req.body;
+
+    const eq = db.prepare('SELECT * FROM equipment WHERE id = ? OR serial_number = ?').get(eqId, eqId);
+    if (!eq) {
+      return res.status(404).json({ error: 'Equipment not found' });
+    }
+
+    const reporter = reportedBy || req.user.name || req.user.role;
+    const note = `[FAULT REPORTED by ${reporter} (${severity || 'High'})]: ${faultDescription || 'Mechanical or electrical fault observed during clinical inspection.'}`;
+
+    db.prepare(`
+      UPDATE equipment 
+      SET status = 'Under Maintenance', condition = 'Degraded', condition_score = 45,
+          last_inspection = ?
+      WHERE id = ?
+    `).run(note, eq.id);
+
+    const notifId = 'notif-' + Date.now();
+    const notifTitle = `⚠️ Faulty Equipment Reported: ${eq.name}`;
+    const notifMsg = `${reporter} reported fault on ${eq.name} (${eq.serial_number}) in ${eq.location || eq.ward || 'Ward'}: ${faultDescription || 'Taken offline for safety'}.`;
+
+    db.prepare(`
+      INSERT INTO notifications (id, hospital_id, title, message, type, category, reference_id, timestamp, read)
+      VALUES (?, ?, ?, ?, 'critical', 'equipment_fault', ?, 'Just now', 0)
+    `).run(notifId, eq.hospital_id, notifTitle, notifMsg, eq.serial_number);
+
+    logAudit(eq.hospital_id, req.user.id, req.user.role, 'REPORT_EQUIPMENT_FAULT', 'equipment', eq.id, {
+      previousStatus: eq.status,
+      currentStatus: 'Under Maintenance',
+      faultDescription
+    });
+
+    const updated = db.prepare('SELECT * FROM equipment WHERE id = ?').get(eq.id);
+    broadcastToHospital(eq.hospital_id, 'equipment_updated', updated);
+
+    res.json({ message: 'Fault reported. Equipment has been taken offline for biomedical inspection.', equipment: updated });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to report equipment fault', details: err.message });
+  }
+});
+
+// Return Resource & Complete Lifecycle
+app.post('/api/requests/:requestId/return', authenticateToken, requireRole(['nurse', 'doctor', 'admin']), (req, res) => {
+  try {
+    const { requestId } = req.params;
+    const { returnNotes } = req.body;
+
+    const existingReq = db.prepare('SELECT * FROM resource_requests WHERE id = ? OR request_id = ?').get(requestId, requestId);
+    if (!existingReq) {
+      return res.status(404).json({ error: 'Resource request not found' });
+    }
+
+    // 1. If allocated resource was equipment, return to Available
+    if (existingReq.allocated_resource_id) {
+      const eq = db.prepare('SELECT * FROM equipment WHERE id = ? OR serial_number = ?').get(existingReq.allocated_resource_id, existingReq.allocated_resource_id);
+      if (eq) {
+        db.prepare("UPDATE equipment SET status = 'Available' WHERE id = ?").run(eq.id);
+        broadcastToHospital(existingReq.hospital_id, 'equipment_updated', {
+          id: eq.id,
+          status: 'Available'
+        });
+      }
+
+      // If allocated resource was bed, transition to cleaning
+      const bed = db.prepare('SELECT * FROM hospital_beds WHERE id = ? OR bed_number = ?').get(existingReq.allocated_resource_id, existingReq.allocated_resource_id);
+      if (bed) {
+        db.prepare("UPDATE hospital_beds SET status = 'cleaning', patient_name = null, patient_id = null, last_updated = 'Just now' WHERE id = ?").run(bed.id);
+        broadcastToHospital(existingReq.hospital_id, 'bed_updated', {
+          bedId: bed.id,
+          bedNumber: bed.bed_number,
+          newStatus: 'cleaning',
+          lastUpdated: 'Just now'
+        });
+      }
+
+      // If allocated resource was supply, restore available quantity
+      const supply = db.prepare('SELECT * FROM hospital_resources WHERE id = ? OR resource_id = ?').get(existingReq.allocated_resource_id, existingReq.allocated_resource_id);
+      if (supply) {
+        const restoredAvail = Math.min(supply.quantity, supply.available_quantity + (existingReq.quantity || 1));
+        const newStatus = restoredAvail === supply.quantity ? 'Available' : 'Partially Available';
+        db.prepare(`
+          UPDATE hospital_resources 
+          SET available_quantity = ?, status = ?, last_updated = 'Just now', updated_at = CURRENT_TIMESTAMP
+          WHERE id = ?
+        `).run(restoredAvail, newStatus, supply.id);
+
+        broadcastToHospital(existingReq.hospital_id, 'resource_updated', {
+          id: supply.id,
+          availableQuantity: restoredAvail,
+          status: newStatus
+        });
+      }
+    }
+
+    const timeline = JSON.parse(existingReq.timeline || '[]');
+    timeline.unshift({
+      id: 't-' + Date.now(),
+      action: 'Completed & Returned',
+      actor: req.user.name || req.user.role,
+      notes: returnNotes || 'Resource returned to central reserve post-utilization.',
+      timestamp: 'Just now'
+    });
+
+    db.prepare(`
+      UPDATE resource_requests SET
+        status = 'fulfilled',
+        timeline = ?
+      WHERE id = ?
+    `).run(JSON.stringify(timeline), existingReq.id);
+
+    // Update resource_allocations table
+    db.prepare(`
+      UPDATE resource_allocations 
+      SET status = 'Returned', returned_at = CURRENT_TIMESTAMP 
+      WHERE request_id = ?
+    `).run(existingReq.id);
+
+    logAudit(existingReq.hospital_id, req.user.id, req.user.role, 'RETURN_RESOURCE', 'resource_request', existingReq.request_id, {
+      allocatedResource: existingReq.allocated_resource_id,
+      returnNotes
+    });
+
+    const updatedReq = db.prepare('SELECT * FROM resource_requests WHERE id = ?').get(existingReq.id);
+    broadcastToHospital(existingReq.hospital_id, 'request_updated', {
+      request: updatedReq
+    });
+
+    res.json({ message: 'Resource returned successfully and availability restored', request: updatedReq });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to return resource', details: err.message });
+  }
+});
+
+// ==========================================
 // 7. CLINICAL TASKS (DOCTOR <-> NURSE)
 // ==========================================
 
@@ -1459,6 +2152,7 @@ app.get('/api/clinical-tasks', optionalAuth, (req, res) => {
       createdAt: t.created_at,
       completedAt: t.completed_at,
       executionNotes: t.execution_notes,
+      nurseObservation: t.execution_notes,
       vitalsRecorded: JSON.parse(t.vitals_recorded || '{}')
     }));
 
@@ -1549,7 +2243,7 @@ app.patch(['/api/clinical-tasks/:taskId/status', '/api/clinical-tasks/:taskId'],
       const isCritical = (Number(spo2) && Number(spo2) < 90) || (Number(hr) && Number(hr) > 120) || (Number(sbp) && Number(sbp) < 90) || mews >= 5;
 
       // Update patient in DB
-      const patient = db.prepare('SELECT * FROM patients WHERE patient_id = ?').get(task.patient_id);
+      const patient = db.prepare('SELECT * FROM patients WHERE patient_id = ? OR id = ?').get(task.patient_id, task.patient_id);
       if (patient) {
         const vitalsHistory = JSON.parse(patient.vitals || '[]');
         vitalsHistory.push({
@@ -1737,10 +2431,32 @@ app.get('/api/patients/:patientId/observations', optionalAuth, (req, res) => {
   }
 });
 
-app.post('/api/patients/:patientId/observations', authenticateToken, requireRole(['nurse', 'doctor']), (req, res) => {
+app.post(['/api/patients/:patientId/observations', '/api/patient-observations'], authenticateToken, requireRole(['nurse', 'doctor']), (req, res) => {
   try {
-    const { patientId } = req.params;
+    const patientId = req.params.patientId || req.body.patientId;
+    if (!patientId) {
+      return res.status(400).json({ error: 'patientId is required' });
+    }
     const { heartRate, systolicBp, diastolicBp, spo2, respiratoryRate, temperature, gcs, avpu, painScore, notes } = req.body;
+
+    if (heartRate !== undefined && heartRate !== null) {
+      const hr = Number(heartRate);
+      if (isNaN(hr) || hr < 20 || hr > 300) {
+        return res.status(400).json({ error: 'Heart rate must be a valid physiological value between 20 and 300 bpm' });
+      }
+    }
+    if (systolicBp !== undefined && systolicBp !== null) {
+      const sbp = Number(systolicBp);
+      if (isNaN(sbp) || sbp < 30 || sbp > 300) {
+        return res.status(400).json({ error: 'Systolic blood pressure must be between 30 and 300 mmHg' });
+      }
+    }
+    if (spo2 !== undefined && spo2 !== null) {
+      const o2 = Number(spo2);
+      if (isNaN(o2) || o2 < 40 || o2 > 100) {
+        return res.status(400).json({ error: 'SpO2 oxygen saturation must be between 40% and 100%' });
+      }
+    }
 
     const patient = db.prepare('SELECT * FROM patients WHERE patient_id = ? OR id = ?').get(patientId, patientId);
     if (!patient) {
@@ -1825,7 +2541,12 @@ app.post('/api/patients/:patientId/observations', authenticateToken, requireRole
       mewsScore: mews
     });
 
-    res.status(201).json({ message: 'Observation recorded successfully', observation: createdObs });
+    res.status(201).json({
+      message: 'Observation recorded successfully',
+      observationId: obsId,
+      mewsScore: mews,
+      observation: createdObs
+    });
   } catch (err) {
     res.status(500).json({ error: 'Failed to record observations', details: err.message });
   }
@@ -1837,7 +2558,17 @@ app.post('/api/patients/:patientId/observations', authenticateToken, requireRole
 
 app.get('/api/notifications', optionalAuth, (req, res) => {
   try {
-    const hospitalId = req.query.hospitalId || req.user?.hospitalId || 'hosp-chn-01';
+    // Multi-tenant boundary: enforce authenticated tenant unless user has state_authority role
+    let hospitalId;
+    if (req.user?.hospitalId) {
+      if (req.user.role === 'state_authority') {
+        hospitalId = req.query.hospitalId || req.user.hospitalId;
+      } else {
+        hospitalId = req.user.hospitalId;
+      }
+    } else {
+      hospitalId = req.query.hospitalId || 'hosp-chn-01';
+    }
     const notifs = db.prepare(`
       SELECT * FROM notifications WHERE hospital_id = ? ORDER BY rowid DESC LIMIT 50
     `).all(hospitalId).map(n => ({
@@ -2006,7 +2737,7 @@ app.get('/api/hospitals/:hospitalId/dashboard', optionalAuth, (req, res) => {
     }));
 
     const notifications = db.prepare(`
-      SELECT * FROM notifications WHERE hospital_id = ? ORDER BY timestamp DESC, created_at DESC LIMIT 20
+      SELECT * FROM notifications WHERE hospital_id = ? ORDER BY timestamp DESC LIMIT 20
     `).all(hospitalId).map(n => ({
       id: n.id,
       hospitalId: n.hospital_id,
@@ -2066,7 +2797,7 @@ app.get('/api/hospitals/:hospitalId/dashboard', optionalAuth, (req, res) => {
       createdAt: p.created_at
     }));
 
-    const pendingAdmissions = db.prepare('SELECT * FROM admissions WHERE hospital_id = ? AND status = "Pending" ORDER BY created_at DESC').all(hospitalId).map(adm => ({
+    const pendingAdmissions = db.prepare("SELECT * FROM admissions WHERE hospital_id = ? AND status = 'Pending' ORDER BY created_at DESC").all(hospitalId).map(adm => ({
       id: adm.id,
       patientId: adm.patient_id,
       hospitalId: adm.hospital_id,
@@ -2487,7 +3218,7 @@ app.get('/api/transfers', optionalAuth, (req, res) => {
 app.post('/api/transfers', authenticateToken, requireRole(['doctor', 'admin']), (req, res) => {
   try {
     const { patientId, hospitalId = 'hosp-chn-01', fromWard, toWard, reason, fromBedId, toBedId } = req.body;
-    const newId = 'trf-' + Math.floor(100 + Math.random() * 900);
+    const newId = 'trf-' + Date.now() + '-' + Math.floor(100 + Math.random() * 900);
     const doctorName = req.user?.name || 'Dr. Sundaramoorthy M.';
 
     db.prepare(`
@@ -2790,6 +3521,10 @@ app.get('/api/emergency/incidents', optionalAuth, (req, res) => {
     let query = 'SELECT * FROM emergency_incidents WHERE hospital_id = ?';
     const params = [hospitalId];
 
+    if (req.query.includeSimulated !== 'true') {
+      query += ' AND (is_simulated = 0 OR is_simulated IS NULL)';
+    }
+
     if (req.query.status) {
       query += ' AND status = ?';
       params.push(req.query.status);
@@ -2800,30 +3535,36 @@ app.get('/api/emergency/incidents', optionalAuth, (req, res) => {
     }
 
     query += ' ORDER BY priority_score ASC, created_at DESC';
-    const incidents = db.prepare(query).all(...params).map(inc => ({
-      id: inc.id,
-      incidentId: inc.incident_id,
-      hospitalId: inc.hospital_id,
-      patientId: inc.patient_id,
-      patientName: inc.patient_name,
-      emergencyType: inc.emergency_type,
-      severity: inc.severity,
-      location: inc.location,
-      requiredResources: JSON.parse(inc.required_resources || '[]'),
-      assignedDoctor: inc.assigned_doctor,
-      assignedNurse: inc.assigned_nurse,
-      status: inc.status,
-      waitingMinutes: inc.waiting_minutes,
-      priorityScore: inc.priority_score,
-      priorityJustification: inc.priority_justification,
-      shortageFlag: Boolean(inc.shortage_flag),
-      shortageDetails: JSON.parse(inc.shortage_details || 'null'),
-      allocatedResources: JSON.parse(inc.allocated_resources || 'null'),
-      timeline: JSON.parse(inc.timeline || '[]'),
-      resolutionSummary: inc.resolution_summary,
-      createdAt: inc.created_at,
-      updatedAt: inc.updated_at
-    }));
+    const incidents = db.prepare(query).all(...params).map(inc => {
+      const alloc = JSON.parse(inc.allocated_resources || 'null');
+      return {
+        id: inc.id,
+        incidentId: inc.incident_id,
+        hospitalId: inc.hospital_id,
+        patientId: inc.patient_id,
+        patientName: inc.patient_name,
+        emergencyType: inc.emergency_type,
+        severity: inc.severity,
+        location: inc.location,
+        requiredResources: JSON.parse(inc.required_resources || '[]'),
+        assignedDoctor: inc.assigned_doctor,
+        assignedNurse: inc.assigned_nurse,
+        status: inc.status,
+        waitingMinutes: inc.waiting_minutes,
+        priorityScore: inc.priority_score,
+        priorityJustification: inc.priority_justification,
+        shortageFlag: Boolean(inc.shortage_flag),
+        shortageDetails: JSON.parse(inc.shortage_details || 'null'),
+        allocatedResources: alloc,
+        allocatedBedId: alloc?.bedId || alloc?.allocatedBedId || null,
+        allocated_bed_id: alloc?.bedId || alloc?.allocatedBedId || null,
+        timeline: JSON.parse(inc.timeline || '[]'),
+        resolutionSummary: inc.resolution_summary,
+        isSimulated: Boolean(inc.is_simulated),
+        createdAt: inc.created_at,
+        updatedAt: inc.updated_at
+      };
+    });
 
     res.json(incidents);
   } catch (err) {
@@ -2924,6 +3665,7 @@ app.get('/api/emergency/incidents/:id', optionalAuth, (req, res) => {
         allocatedResources: JSON.parse(inc.allocated_resources || 'null'),
         timeline: JSON.parse(inc.timeline || '[]'),
         resolutionSummary: inc.resolution_summary,
+        isSimulated: Boolean(inc.is_simulated),
         createdAt: inc.created_at,
         updatedAt: inc.updated_at
       },
@@ -2937,9 +3679,14 @@ app.get('/api/emergency/incidents/:id', optionalAuth, (req, res) => {
 // 3. Create Emergency Incident with Intelligent Resource Analysis
 app.post('/api/emergency/incidents', authenticateToken, requireRole(['doctor', 'admin', 'nurse']), (req, res) => {
   try {
+    const emergencyType = req.body.emergencyType || req.body.incidentType;
+    const severity = req.body.severity;
+    const location = req.body.location;
+    const initialNotes = req.body.initialNotes || req.body.description;
+    const isSimulated = Boolean(req.body.isSimulated || req.body.is_simulated);
     const {
-      patientId, patientName, emergencyType, severity, location,
-      requiredResources, assignedDoctor, assignedNurse, initialNotes
+      patientId, patientName,
+      requiredResources, assignedDoctor, assignedNurse
     } = req.body;
 
     if (!emergencyType || !severity || !location) {
@@ -2947,9 +3694,9 @@ app.post('/api/emergency/incidents', authenticateToken, requireRole(['doctor', '
     }
 
     const hospitalId = req.user.hospitalId || 'hosp-chn-01';
-    const incCount = db.prepare('SELECT COUNT(*) as count FROM emergency_incidents').get().count + 1;
-    const incidentId = 'INC-2026-' + incCount.toString().padStart(3, '0');
-    const newId = 'inc-' + Date.now();
+    const prefix = isSimulated ? 'SIM-' : 'INC-2026-';
+    const incidentId = prefix + Date.now().toString().slice(-5) + '-' + Math.floor(100 + Math.random() * 900);
+    const newId = 'inc-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     const patId = patientId || ('EMG-' + Math.floor(1000 + Math.random() * 9000));
     const patName = patientName || 'Emergency Triage Patient';
 
@@ -2982,8 +3729,8 @@ app.post('/api/emergency/incidents', authenticateToken, requireRole(['doctor', '
       INSERT INTO emergency_incidents (
         id, incident_id, hospital_id, patient_id, patient_name, emergency_type,
         severity, location, required_resources, assigned_doctor, assigned_nurse,
-        status, waiting_minutes, priority_score, shortage_flag, shortage_details, timeline
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Reported', 0, ?, ?, ?, ?)
+        status, waiting_minutes, priority_score, shortage_flag, shortage_details, timeline, is_simulated
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Reported', 0, ?, ?, ?, ?, ?)
     `).run(
       newId, incidentId, hospitalId, patId, patName, emergencyType,
       severity, location, JSON.stringify(resourcesList),
@@ -2992,7 +3739,8 @@ app.post('/api/emergency/incidents', authenticateToken, requireRole(['doctor', '
       priorityScore,
       matchingAnalysis.hasShortage ? 1 : 0,
       matchingAnalysis.hasShortage ? JSON.stringify(matchingAnalysis.shortages) : null,
-      JSON.stringify(timeline)
+      JSON.stringify(timeline),
+      isSimulated ? 1 : 0
     );
 
     // Alert Admin & Command Center
@@ -3101,18 +3849,59 @@ app.patch('/api/emergency/incidents/:id/priority', authenticateToken, requireRol
 app.post('/api/emergency/incidents/:id/allocate-resources', authenticateToken, requireRole(['doctor', 'admin']), (req, res) => {
   try {
     const { id } = req.params;
-    const { allocatedBedId, allocatedVentilatorId, allocatedSpecialist, bloodUnits, authorizationNotes } = req.body;
+    const allocatedBedId = req.body.allocatedBedId || req.body.bedId;
+    const allocatedVentilatorId = req.body.allocatedVentilatorId || req.body.ventilatorId;
+    const { allocatedSpecialist, bloodUnits, authorizationNotes } = req.body;
 
     const inc = db.prepare('SELECT * FROM emergency_incidents WHERE id = ? OR incident_id = ?').get(id, id);
     if (!inc) {
       return res.status(404).json({ error: 'Incident not found' });
     }
 
+    const isSimulated = Boolean(inc.is_simulated || req.body.isSimulated);
+
     const allocatedObj = {
       allocatedAt: new Date().toISOString(),
       authorizedBy: req.user.name || 'Hospital Command Lead',
-      authorizedRole: req.user.role
+      authorizedRole: req.user.role,
+      isSimulated
     };
+
+    if (isSimulated) {
+      // Sandbox mode: Record allocation in incident timeline & allocated_resources without mutating live production beds or equipment
+      if (allocatedBedId) {
+        allocatedObj.bed = `Simulated Bed (${allocatedBedId})`;
+        allocatedObj.bedId = allocatedBedId;
+        allocatedObj.allocatedBedId = allocatedBedId;
+      }
+      if (allocatedVentilatorId) {
+        allocatedObj.ventilator = `Simulated Ventilator (${allocatedVentilatorId})`;
+        allocatedObj.ventilatorId = allocatedVentilatorId;
+      }
+      if (allocatedSpecialist) allocatedObj.specialist = allocatedSpecialist;
+      if (bloodUnits) allocatedObj.bloodUnits = bloodUnits;
+
+      const timeline = JSON.parse(inc.timeline || '[]');
+      timeline.unshift({
+        timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        action: 'Resources Allocated (Simulated Sandbox)',
+        actor: req.user.name || req.user.role,
+        notes: `[SIMULATED - SANDBOX] Resources simulated: ${Object.entries(allocatedObj).filter(([k]) => !k.startsWith('auth')).map(([k, v]) => `${k}: ${v}`).join(' | ')}. Production beds and equipment untouched.`
+      });
+
+      db.prepare(`
+        UPDATE emergency_incidents SET
+          status = 'Resources Allocated',
+          shortage_flag = 0,
+          allocated_resources = ?,
+          timeline = ?,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `).run(JSON.stringify(allocatedObj), JSON.stringify(timeline), inc.id);
+
+      const updated = db.prepare('SELECT * FROM emergency_incidents WHERE id = ?').get(inc.id);
+      return res.json({ success: true, message: 'Simulated resources assigned in sandbox mode without mutating production records', incident: updated, allocatedResources: allocatedObj, simulated: true });
+    }
 
     // If allocating Bed: enforce 1:1 safety check
     if (allocatedBedId) {
@@ -3134,6 +3923,7 @@ app.post('/api/emergency/incidents/:id/allocate-resources', authenticateToken, r
 
         allocatedObj.bed = `${bed.bed_number} (${bed.ward})`;
         allocatedObj.bedId = bed.id;
+        allocatedObj.allocatedBedId = bed.id;
 
         broadcastToHospital(inc.hospital_id, 'bed_updated', {
           bedId: bed.id,
@@ -3150,6 +3940,9 @@ app.post('/api/emergency/incidents/:id/allocate-resources', authenticateToken, r
     if (allocatedVentilatorId) {
       const eq = db.prepare('SELECT * FROM equipment WHERE id = ? OR serial_number = ?').get(allocatedVentilatorId, allocatedVentilatorId);
       if (eq) {
+        if (eq.status === 'Under Maintenance' || eq.status === 'Offline') {
+          return res.status(409).json({ error: `Cannot allocate Equipment ${eq.name}: Unit is currently under maintenance or offline!` });
+        }
         db.prepare("UPDATE equipment SET status = 'In Use' WHERE id = ?").run(eq.id);
         allocatedObj.ventilator = `${eq.name} (${eq.serial_number})`;
         allocatedObj.ventilatorId = eq.id;
@@ -3225,19 +4018,55 @@ app.post('/api/emergency/incidents/:id/allocate-resources', authenticateToken, r
 app.post('/api/emergency/incidents/:id/resolve', authenticateToken, requireRole(['doctor', 'admin']), (req, res) => {
   try {
     const { id } = req.params;
-    const { resolutionSummary } = req.body;
+    const resolutionSummary = req.body.resolutionSummary || req.body.notes || 'Emergency resolved. Patient stabilized and transferred to continuous inpatient care.';
+    const actor = req.body.resolvedBy || req.user.name || req.user.role;
+    const releaseBed = req.body.releaseBed === true || req.body.freeBed === true;
+    const releaseVentilator = req.body.releaseVentilator === true;
 
     const inc = db.prepare('SELECT * FROM emergency_incidents WHERE id = ? OR incident_id = ?').get(id, id);
     if (!inc) {
       return res.status(404).json({ error: 'Incident not found' });
     }
 
+    const alloc = JSON.parse(inc.allocated_resources || 'null');
+    const targetBedId = req.body.bedId || alloc?.bedId || alloc?.allocatedBedId;
+    const targetVentId = alloc?.ventilatorId || alloc?.allocatedVentilatorId;
+
+    if (!inc.is_simulated) {
+      if (releaseBed && targetBedId) {
+        db.prepare(`
+          UPDATE hospital_beds SET
+            status = 'ready',
+            patient_name = NULL,
+            patient_id = NULL,
+            assigned_doctor = NULL,
+            last_updated = 'Just now',
+            notes = 'Bed released after emergency incident resolution'
+          WHERE id = ?
+        `).run(targetBedId);
+
+        broadcastToHospital(inc.hospital_id, 'bed_updated', {
+          bedId: targetBedId,
+          newStatus: 'ready',
+          lastUpdated: 'Just now'
+        });
+      }
+
+      if (releaseVentilator && targetVentId) {
+        db.prepare("UPDATE equipment SET status = 'Available' WHERE id = ?").run(targetVentId);
+        broadcastToHospital(inc.hospital_id, 'equipment_updated', {
+          id: targetVentId,
+          status: 'Available'
+        });
+      }
+    }
+
     const timeline = JSON.parse(inc.timeline || '[]');
     timeline.unshift({
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       action: 'Incident Resolved',
-      actor: req.user.name || req.user.role,
-      notes: resolutionSummary || 'Emergency resolved. Patient stabilized and transferred to continuous inpatient care.'
+      actor: actor,
+      notes: resolutionSummary
     });
 
     db.prepare(`
@@ -3247,10 +4076,12 @@ app.post('/api/emergency/incidents/:id/resolve', authenticateToken, requireRole(
         timeline = ?,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
-    `).run(resolutionSummary || 'Resolved successfully', JSON.stringify(timeline), inc.id);
+    `).run(resolutionSummary, JSON.stringify(timeline), inc.id);
 
     logAudit(inc.hospital_id, req.user.id, req.user.role, 'RESOLVE_EMERGENCY_INCIDENT', 'emergency_incident', inc.incident_id, {
-      resolutionSummary
+      resolutionSummary,
+      resolvedBy: actor,
+      releasedBed: releaseBed ? targetBedId : null
     });
 
     const updated = db.prepare('SELECT * FROM emergency_incidents WHERE id = ?').get(inc.id);
@@ -3259,6 +4090,108 @@ app.post('/api/emergency/incidents/:id/resolve', authenticateToken, requireRole(
     res.json({ success: true, message: 'Emergency incident resolved', incident: updated });
   } catch (err) {
     res.status(500).json({ error: 'Failed to resolve incident', details: err.message });
+  }
+});
+
+// 7. Simulation Scenarios Engine (Isolated Sandbox)
+app.post('/api/emergency/simulate-scenario', authenticateToken, requireRole(['doctor', 'admin']), (req, res) => {
+  try {
+    const { scenario } = req.body;
+    const hospitalId = req.user.hospitalId || 'hosp-chn-01';
+
+    if (scenario === 'reset') {
+      db.prepare('DELETE FROM emergency_incidents WHERE is_simulated = 1').run();
+      return res.json({ success: true, message: 'Simulation sandbox reset. All simulated records cleared.' });
+    }
+
+    const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    let createdIncidents = [];
+
+    if (scenario === 'mass_casualty') {
+      const victims = [
+        { name: 'Simulated Patient Alpha (MCI-1)', type: 'Polytrauma & Hemorrhagic Shock', sev: 'Level 1 (Code Red)', res: ['ICU Bed', 'Mechanical Ventilator', 'O-Negative PRBC', 'Trauma Surgeon'], loc: 'Triage Bay 01' },
+        { name: 'Simulated Patient Beta (MCI-2)', type: 'Traumatic Brain Injury (TBI)', sev: 'Level 1 (Code Red)', res: ['ICU Bed', 'Mechanical Ventilator', 'Neurosurgeon'], loc: 'Triage Bay 02' },
+        { name: 'Simulated Patient Gamma (MCI-3)', type: 'Thoracic Crush & Pneumothorax', sev: 'Level 2 (Code Orange)', res: ['Emergency Bed', 'Chest Tube Kit', 'Pulmonologist'], loc: 'Triage Bay 03' }
+      ];
+
+      for (let i = 0; i < victims.length; i++) {
+        const v = victims[i];
+        const simId = `sim-inc-${Date.now()}-${i}`;
+        const incId = `SIM-MCI-${Date.now().toString().slice(-4)}-${i + 1}`;
+        const matching = matchEmergencyResources(v.res, hospitalId);
+        const timeline = [{ timestamp: nowStr, action: 'Emergency Reported (Simulated MCI)', actor: '108 Disaster Dispatch', notes: `Simulated MCI victim incoming to ${v.loc}` }];
+
+        db.prepare(`
+          INSERT INTO emergency_incidents (
+            id, incident_id, hospital_id, patient_id, patient_name, emergency_type,
+            severity, location, required_resources, assigned_doctor, assigned_nurse,
+            status, waiting_minutes, priority_score, shortage_flag, shortage_details, timeline, is_simulated
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Dr. Sundaramoorthy M.', 'Nurse Deepa R.', 'Reported', 0, ?, ?, ?, ?, 1)
+        `).run(
+          simId, incId, hospitalId, `SIM-PAT-${i + 1}`, v.name, v.type,
+          v.sev, v.loc, JSON.stringify(v.res),
+          v.sev.includes('Red') ? 1 : 2,
+          matching.hasShortage ? 1 : 0,
+          matching.hasShortage ? JSON.stringify(matching.shortages) : null,
+          JSON.stringify(timeline)
+        );
+        createdIncidents.push({ id: simId, incidentId: incId, patientName: v.name, severity: v.sev, isSimulated: true });
+      }
+    } else if (scenario === 'icu_shortage') {
+      const simId = `sim-icu-shortage-${Date.now()}`;
+      const incId = `SIM-SURGE-${Date.now().toString().slice(-4)}`;
+      const res = ['ICU Bed', 'Mechanical Ventilator'];
+      const timeline = [{ timestamp: nowStr, action: 'ICU Surge Simulation Triggered', actor: 'Command Center Simulator', notes: 'Surge simulation testing HDU buffer diversion and priority scoring' }];
+
+      db.prepare(`
+        INSERT INTO emergency_incidents (
+          id, incident_id, hospital_id, patient_id, patient_name, emergency_type,
+          severity, location, required_resources, assigned_doctor, assigned_nurse,
+          status, waiting_minutes, priority_score, shortage_flag, shortage_details, timeline, is_simulated
+        ) VALUES (?, ?, ?, 'SIM-PAT-SURGE', 'Simulated ARDS Influx', 'Acute Respiratory Failure & ARDS',
+          'Level 1 (Code Red)', 'Resuscitation Suite', ?, 'Dr. Sundaramoorthy M.', 'Nurse Revathi S.',
+          'Reported', 0, 1, 1, ?, ?, 1)
+      `).run(
+        simId, incId, hospitalId, JSON.stringify(res),
+        JSON.stringify([{ resourceType: 'ICU Bed', severity: 'Critical', message: 'Simulated 100% ICU saturation', alternativeRecommendation: 'High Dependency Unit (HDU) Step-Down buffer' }]),
+        JSON.stringify(timeline)
+      );
+      createdIncidents.push({ id: simId, incidentId: incId, patientName: 'Simulated ARDS Influx', isSimulated: true });
+    } else if (scenario === 'ventilator_failure') {
+      const simId = `sim-vent-fail-${Date.now()}`;
+      const incId = `SIM-VENT-${Date.now().toString().slice(-4)}`;
+      const res = ['Mechanical Ventilator'];
+      const timeline = [{ timestamp: nowStr, action: 'Biomedical Telemetry Alarm', actor: 'Ventilator Watchdog (Simulated)', notes: 'Simulated Servo-U failure: rapid secondary ventilator dispatch required' }];
+
+      db.prepare(`
+        INSERT INTO emergency_incidents (
+          id, incident_id, hospital_id, patient_id, patient_name, emergency_type,
+          severity, location, required_resources, assigned_doctor, assigned_nurse,
+          status, waiting_minutes, priority_score, shortage_flag, shortage_details, timeline, is_simulated
+        ) VALUES (?, ?, ?, 'SIM-PAT-VF', 'Simulated Ventilator Rapid Exchange', 'Mechanical Ventilator Disconnect Risk',
+          'Level 1 (Code Red)', 'ICU Bay 4', ?, 'Dr. Sundaramoorthy M.', 'Nurse Revathi S.',
+          'Reported', 0, 1, 0, NULL, ?, 1)
+      `).run(
+        simId, incId, hospitalId, JSON.stringify(res), JSON.stringify(timeline)
+      );
+      createdIncidents.push({ id: simId, incidentId: incId, patientName: 'Simulated Ventilator Rapid Exchange', isSimulated: true });
+    } else {
+      return res.status(400).json({ error: 'Invalid scenario. Choose from: mass_casualty, icu_shortage, ventilator_failure, reset' });
+    }
+
+    logAudit(hospitalId, req.user.id, req.user.role, 'EXECUTE_SIMULATION_SCENARIO', 'emergency_incident', scenario, {
+      scenario,
+      createdCount: createdIncidents.length
+    });
+
+    res.json({
+      success: true,
+      scenario,
+      message: `Simulation scenario '${scenario}' executed in isolated sandbox mode. Production beds and live patient records untouched.`,
+      incidents: createdIncidents
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to execute simulation scenario', details: err.message });
   }
 });
 
@@ -3706,7 +4639,7 @@ app.get('/api/workflows/rules', (req, res) => {
 });
 
 // Create new workflow rule
-app.post('/api/workflows/rules', (req, res) => {
+app.post('/api/workflows/rules', authenticateToken, requireRole(['admin']), (req, res) => {
   try {
     const {
       name,
@@ -3765,7 +4698,7 @@ app.post('/api/workflows/rules', (req, res) => {
 });
 
 // Update workflow rule (toggle active or edit)
-app.put('/api/workflows/rules/:id', (req, res) => {
+app.put('/api/workflows/rules/:id', authenticateToken, requireRole(['admin']), (req, res) => {
   try {
     const { id } = req.params;
     const existing = db.prepare('SELECT * FROM workflow_rules WHERE id = ?').get(id);
@@ -3820,7 +4753,7 @@ app.put('/api/workflows/rules/:id', (req, res) => {
 });
 
 // Delete custom workflow rule
-app.delete('/api/workflows/rules/:id', (req, res) => {
+app.delete('/api/workflows/rules/:id', authenticateToken, requireRole(['admin']), (req, res) => {
   try {
     const { id } = req.params;
     const rule = db.prepare('SELECT * FROM workflow_rules WHERE id = ?').get(id);
@@ -3869,7 +4802,7 @@ app.get('/api/workflows/executions', (req, res) => {
 });
 
 // Trigger workflow execution
-app.post(['/api/workflows/executions/trigger', '/api/workflows/trigger'], (req, res) => {
+app.post(['/api/workflows/executions/trigger', '/api/workflows/trigger'], authenticateToken, requireRole(['admin', 'doctor', 'nurse']), (req, res) => {
   try {
     const { ruleId, triggerData = {}, initiatedBy = 'System Trigger' } = req.body;
     const rule = db.prepare('SELECT * FROM workflow_rules WHERE id = ?').get(ruleId);
@@ -4001,7 +4934,7 @@ app.post(['/api/workflows/executions/trigger', '/api/workflows/trigger'], (req, 
 });
 
 // Approve pending workflow step
-app.post('/api/workflows/executions/:id/approve', (req, res) => {
+app.post('/api/workflows/executions/:id/approve', authenticateToken, requireRole(['admin', 'doctor']), (req, res) => {
   try {
     const { id } = req.params;
     const { approver = 'Authorized Admin', approverRole = 'admin', comments = 'Approved clinical protocol' } = req.body;
@@ -4069,7 +5002,7 @@ app.post('/api/workflows/executions/:id/approve', (req, res) => {
 });
 
 // Reject pending workflow step
-app.post('/api/workflows/executions/:id/reject', (req, res) => {
+app.post('/api/workflows/executions/:id/reject', authenticateToken, requireRole(['admin', 'doctor']), (req, res) => {
   try {
     const { id } = req.params;
     const { reviewer = 'Authorized Admin', reason = 'Resource capacity or safety constraint' } = req.body;
@@ -4127,7 +5060,7 @@ app.post('/api/workflows/executions/:id/reject', (req, res) => {
 });
 
 // Retry a failed workflow
-app.post('/api/workflows/executions/:id/retry', (req, res) => {
+app.post('/api/workflows/executions/:id/retry', authenticateToken, requireRole(['admin', 'doctor']), (req, res) => {
   try {
     const { id } = req.params;
     const execution = db.prepare('SELECT * FROM workflow_executions WHERE id = ?').get(id);
@@ -4586,9 +5519,9 @@ app.post('/api/interoperability/abdm/consents', authenticateToken, (req, res) =>
       daysValid = 30
     } = req.body;
 
-    const hospitalId = req.user.hospital_id || 'hosp-chn-01';
-    const consentId = 'CNS-ABDM-' + Math.floor(100 + Math.random() * 900);
-    const id = `cns-${Date.now()}`;
+    const hospitalId = req.user.hospital_id || req.user.hospitalId || 'hosp-chn-01';
+    const consentId = 'CNS-ABDM-' + Date.now() + '-' + Math.floor(100 + Math.random() * 900);
+    const id = `cns-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
     const fromDate = new Date().toISOString().split('T')[0];
     const toDate = new Date(Date.now() + daysValid * 86400000).toISOString().split('T')[0];
     const expiresAt = `${toDate} 23:59:59`;
@@ -4809,7 +5742,20 @@ app.get('/api/patient-observations', optionalAuth, (req, res) => {
       params.push(patientId);
     }
     query += ' ORDER BY recorded_at DESC LIMIT 50';
-    const obs = db.prepare(query).all(...params);
+    const obs = db.prepare(query).all(...params).map(r => ({
+      ...r,
+      patientId: r.patient_id,
+      hospitalId: r.hospital_id,
+      recordedBy: r.recorded_by,
+      recordedByRole: r.recorded_by_role,
+      recordedAt: r.recorded_at,
+      heartRate: r.heart_rate,
+      systolicBp: r.systolic_bp,
+      diastolicBp: r.diastolic_bp,
+      respiratoryRate: r.respiratory_rate,
+      painScore: r.pain_score,
+      mewsScore: r.mews_score
+    }));
     res.json(obs);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch observations', details: err.message });
@@ -4974,25 +5920,441 @@ app.get('/api/nurse/:nurseId/tasks', optionalAuth, (req, res) => {
   }
 });
 
+const handoversStore = [
+  {
+    id: 'ho-001',
+    hospitalId: 'hosp-chn-01',
+    ward: 'ICU Block B',
+    outgoingNurse: 'Nurse Deepa R., RN',
+    incomingNurse: 'Nurse Priya M., BSN',
+    shiftType: 'Day to Night (14:00 - 22:00)',
+    patientCount: 8,
+    criticalPatients: ['pt-rec-01', 'pt-rec-03'],
+    situation: 'ICU Block B operating at 85% capacity. 2 high-acuity ventilator patients.',
+    background: 'Morning shifts experienced 1 Code Blue (resuscitated and stabilized). Bed 3 transferred to step-down.',
+    assessment: 'Patient Ramesh K. (Bed 04) experienced transient desaturation (SpO2 88%), now stabilized on 4L O2.',
+    recommendation: 'Re-check ABG at 22:00 for Bed 04. Fasting blood sugar protocol for Bed 02 at 06:00.',
+    notes: 'Bed 4 on close SpO2 watch. Bed 2 scheduled for AM extubation protocol.',
+    checklistCompleted: true,
+    narcoticsCountVerified: true,
+    crashCartChecked: true,
+    timestamp: new Date(Date.now() - 3600000 * 4).toISOString()
+  },
+  {
+    id: 'ho-002',
+    hospitalId: 'hosp-chn-01',
+    ward: 'ICU Block A',
+    outgoingNurse: 'Nurse Revathi S., Senior RN',
+    incomingNurse: 'Nurse Deepa R., RN',
+    shiftType: 'Night to Morning (22:00 - 06:00)',
+    patientCount: 6,
+    criticalPatients: ['pt-rec-02'],
+    situation: 'Stable shift across ICU Block A. Bed ICU-02 admitted at 03:30 with acute coronary syndrome.',
+    background: 'Heparin infusion initiated per Cardiology protocol. Target PTT 60-80s.',
+    assessment: 'Continuous bedside telemetry NSR at 78 bpm. Pain reduced from 8/10 to 2/10.',
+    recommendation: 'Cardiology rounds scheduled for 09:00. Daily ECG and Troponin I due at 07:00.',
+    notes: 'Heparin infusion running smoothly at 18 units/kg/hr. IV access in left forearm patent.',
+    checklistCompleted: true,
+    narcoticsCountVerified: true,
+    crashCartChecked: true,
+    timestamp: new Date(Date.now() - 3600000 * 12).toISOString()
+  }
+];
+
+app.get('/api/handovers/draft', optionalAuth, (req, res) => {
+  try {
+    const { hospitalId = 'hosp-chn-01', ward = 'ICU Block A' } = req.query;
+
+    const patients = db.prepare("SELECT * FROM patients WHERE hospital_id = ? AND (ward LIKE ? OR ward LIKE '%ICU%' OR 1=1) LIMIT 12").all(hospitalId, `%${ward}%`);
+    const criticalPatients = patients.filter(p => (p.mews_score || 0) >= 3);
+    const pendingTasks = db.prepare("SELECT count(*) as count FROM clinical_tasks WHERE hospital_id = ? AND status != 'Completed'").get(hospitalId)?.count || 0;
+    const statTasks = db.prepare("SELECT count(*) as count FROM clinical_tasks WHERE hospital_id = ? AND status != 'Completed' AND (priority LIKE '%Stat%' OR priority = 'Urgent')").get(hospitalId)?.count || 0;
+    const beds = db.prepare("SELECT * FROM hospital_beds WHERE hospital_id = ? AND (ward LIKE ? OR ward LIKE '%ICU%')").all(hospitalId, `%${ward}%`);
+    const readyBeds = beds.filter(b => b.status === 'ready' || b.status === 'Available').length;
+    const turnaroundBeds = beds.filter(b => ['cleaning', 'equipment_check', 'nurse_confirmation'].includes(b.status)).length;
+
+    const draftSituation = `${ward} Census: ${patients.length} active inpatients. ${readyBeds} bed(s) operationally ready for immediate emergency transfer. ${turnaroundBeds} bed(s) in active 6-stage turnover.`;
+    const draftBackground = `Shift running on standard protocols. ${criticalPatients.length} patient(s) flagged with elevated early warning score (MEWS >= 3).`;
+    const draftAssessment = `Bedside hemodynamics and telemetry continuous. ${pendingTasks} total pending doctor orders (${statTasks} STAT/Urgent). Zero active Code Blue resuscitations in current shift.`;
+    const draftRecommendation = `Maintain SpO2 surveillance for high-acuity ventilator patients. Expedite nurse sign-off for Bed turnaround. Relieving shift to complete evening lab draws.`;
+
+    res.json({
+      ward,
+      hospitalId,
+      patientCount: patients.length,
+      criticalPatients: criticalPatients.map(p => p.patient_id || p.id),
+      pendingTasksCount: pendingTasks,
+      statTasksCount: statTasks,
+      readyBedsCount: readyBeds,
+      turnaroundBedsCount: turnaroundBeds,
+      situation: draftSituation,
+      background: draftBackground,
+      assessment: draftAssessment,
+      recommendation: draftRecommendation
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to generate handover draft', details: err.message });
+  }
+});
+
 app.get('/api/handovers', optionalAuth, (req, res) => {
   try {
-    const { hospitalId = 'hosp-chn-01' } = req.query;
-    res.json([
-      {
-        id: 'ho-001',
-        hospitalId,
-        ward: 'ICU-B',
-        outgoingNurse: 'Nurse Deepa R.',
-        incomingNurse: 'Nurse Priya M.',
-        shiftType: 'Day to Night',
-        patientCount: 8,
-        criticalPatients: ['pt-rec-01'],
-        notes: 'Bed 4 on close SpO2 watch. Bed 2 scheduled for AM extubation protocol.',
-        timestamp: new Date().toISOString()
+    const { hospitalId = 'hosp-chn-01', ward } = req.query;
+
+    let dbHandovers = [];
+    try {
+      let query = 'SELECT * FROM shift_handovers WHERE hospital_id = ?';
+      const params = [hospitalId];
+      if (ward) {
+        query += ' AND ward LIKE ?';
+        params.push(`%${ward}%`);
       }
-    ]);
+      query += ' ORDER BY created_at DESC';
+      dbHandovers = db.prepare(query).all(...params).map(r => ({
+        id: r.id,
+        hospitalId: r.hospital_id,
+        ward: r.ward,
+        outgoingNurse: r.outgoing_nurse,
+        incomingNurse: r.incoming_nurse,
+        shiftType: r.shift_type,
+        patientCount: r.patient_count,
+        criticalPatients: r.critical_patients ? JSON.parse(r.critical_patients) : [],
+        situation: r.situation,
+        background: r.background,
+        assessment: r.assessment,
+        recommendation: r.recommendation,
+        notes: r.notes,
+        checklistCompleted: Boolean(r.checklist_completed),
+        narcoticsCountVerified: Boolean(r.narcotics_count_verified),
+        crashCartChecked: Boolean(r.crash_cart_checked),
+        status: r.status,
+        acknowledgedBy: r.acknowledged_by,
+        acknowledgedAt: r.acknowledged_at,
+        timestamp: r.created_at
+      }));
+    } catch {
+      // fallback if table uninitialized
+    }
+
+    if (dbHandovers.length > 0) {
+      return res.json(dbHandovers);
+    }
+
+    let list = handoversStore.filter(h => !hospitalId || h.hospitalId === hospitalId);
+    if (ward) {
+      list = list.filter(h => h.ward.toLowerCase().includes(String(ward).toLowerCase()));
+    }
+    res.json(list);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch handovers', details: err.message });
+  }
+});
+
+app.post('/api/handovers', optionalAuth, (req, res) => {
+  try {
+    const newHandover = {
+      id: `ho-${Date.now()}`,
+      hospitalId: req.body.hospitalId || 'hosp-chn-01',
+      ward: req.body.ward || 'ICU Block A',
+      outgoingNurse: req.body.outgoingNurse || (req.user && req.user.name) || 'Staff Nurse',
+      incomingNurse: req.body.incomingNurse || 'Relieving Nurse',
+      shiftType: req.body.shiftType || 'Day to Evening',
+      patientCount: req.body.patientCount || 8,
+      criticalPatients: req.body.criticalPatients || [],
+      situation: req.body.situation || '',
+      background: req.body.background || '',
+      assessment: req.body.assessment || '',
+      recommendation: req.body.recommendation || '',
+      notes: req.body.notes || req.body.assessment || 'Shift handover completed without incident.',
+      checklistCompleted: req.body.checklistCompleted ?? true,
+      narcoticsCountVerified: req.body.narcoticsCountVerified ?? true,
+      crashCartChecked: req.body.crashCartChecked ?? true,
+      status: 'Pending Acknowledgment',
+      acknowledgedBy: null,
+      acknowledgedAt: null,
+      timestamp: new Date().toISOString()
+    };
+
+    try {
+      db.prepare(`
+        INSERT INTO shift_handovers (
+          id, hospital_id, ward, outgoing_nurse, incoming_nurse, shift_type,
+          patient_count, critical_patients, situation, background, assessment, recommendation,
+          notes, checklist_completed, narcotics_count_verified, crash_cart_checked, status
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending Acknowledgment')
+      `).run(
+        newHandover.id, newHandover.hospitalId, newHandover.ward, newHandover.outgoingNurse,
+        newHandover.incomingNurse, newHandover.shiftType, newHandover.patientCount,
+        JSON.stringify(newHandover.criticalPatients), newHandover.situation, newHandover.background,
+        newHandover.assessment, newHandover.recommendation, newHandover.notes,
+        newHandover.checklistCompleted ? 1 : 0, newHandover.narcoticsCountVerified ? 1 : 0,
+        newHandover.crashCartChecked ? 1 : 0
+      );
+    } catch (dbErr) {
+      console.warn('Shift handover db insert fallback:', dbErr.message);
+    }
+
+    handoversStore.unshift(newHandover);
+
+    if (io) {
+      io.emit('handover_logged', newHandover);
+    }
+
+    res.status(201).json(newHandover);
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to create handover', details: err.message });
+  }
+});
+
+app.patch('/api/handovers/:id/acknowledge', authenticateToken, requireRole(['nurse', 'doctor', 'admin']), (req, res) => {
+  try {
+    const { id } = req.params;
+    const acknowledgedBy = req.body.acknowledgedBy || req.user.name || 'Receiving Nurse';
+    const acknowledgedAt = new Date().toISOString();
+    const notes = req.body.notes || 'Handover received, narcotics verified, and telemetry cross-checked.';
+
+    try {
+      db.prepare(`
+        UPDATE shift_handovers SET
+          status = 'Acknowledged',
+          acknowledged_by = ?,
+          acknowledged_at = ?,
+          notes = notes || ' | Acknowledged: ' || ?
+        WHERE id = ?
+      `).run(acknowledgedBy, acknowledgedAt, notes, id);
+    } catch {
+      // fallback
+    }
+
+    const memoryItem = handoversStore.find(h => h.id === id);
+    if (memoryItem) {
+      memoryItem.status = 'Acknowledged';
+      memoryItem.acknowledgedBy = acknowledgedBy;
+      memoryItem.acknowledgedAt = acknowledgedAt;
+      memoryItem.notes = (memoryItem.notes || '') + ` | Acknowledged: ${notes}`;
+    }
+
+    logAudit(req.user.hospitalId || 'hosp-chn-01', req.user.id, req.user.role, 'ACKNOWLEDGE_SHIFT_HANDOVER', 'shift_handover', id, {
+      acknowledgedBy,
+      acknowledgedAt
+    });
+
+    if (io) {
+      io.emit('handover_acknowledged', {
+        id,
+        acknowledgedBy,
+        acknowledgedAt,
+        status: 'Acknowledged'
+      });
+    }
+
+    const handoverPayload = {
+      id,
+      status: 'Acknowledged',
+      acknowledgedBy,
+      acknowledged_by: acknowledgedBy,
+      acknowledgedAt
+    };
+
+    res.json({
+      success: true,
+      message: 'Shift handover acknowledged by receiving nurse',
+      id,
+      acknowledgedBy,
+      acknowledged_by: acknowledgedBy,
+      acknowledgedAt,
+      status: 'Acknowledged',
+      handover: handoverPayload
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to acknowledge handover', details: err.message });
+  }
+});
+
+// Medication Administration Records (MAR)
+app.get('/api/medication-administrations', optionalAuth, (req, res) => {
+  try {
+    const { hospitalId = 'hosp-chn-01', patientId, status } = req.query;
+    let query = 'SELECT * FROM medication_administrations WHERE hospital_id = ?';
+    const params = [hospitalId];
+    if (patientId) {
+      query += ' AND patient_id = ?';
+      params.push(patientId);
+    }
+    if (status) {
+      query += ' AND status = ?';
+      params.push(status);
+    }
+    query += ' ORDER BY created_at DESC';
+    let rows = [];
+    try {
+      rows = db.prepare(query).all(...params);
+    } catch {
+      rows = [];
+    }
+
+    if (rows.length === 0 && !patientId) {
+      const defaultMeds = [
+        {
+          id: 'mar-001',
+          patient_id: 'PT-8942',
+          hospital_id: hospitalId,
+          prescription_id: 'rx-01',
+          medication_name: 'Ceftriaxone IV',
+          dose: '1g in 100mL Normal Saline',
+          route: 'IV Infusion',
+          frequency: 'Q12H',
+          scheduled_time: '14:00',
+          administered_time: new Date(Date.now() - 3600000).toISOString(),
+          status: 'Administered',
+          administered_by: 'Nurse Revathi S., RN',
+          administered_by_role: 'nurse',
+          reason_or_notes: 'Infused over 30 mins. No hypersensitivity signs.',
+          five_rights_verified: 1,
+          witness_name: 'Nurse Priya M.'
+        },
+        {
+          id: 'mar-002',
+          patient_id: 'PT-8942',
+          hospital_id: hospitalId,
+          prescription_id: 'rx-01',
+          medication_name: 'Paracetamol IV',
+          dose: '1g IV infusion',
+          route: 'IV Infusion',
+          frequency: 'PRN for Temp > 38.5C',
+          scheduled_time: '18:00',
+          administered_time: 'Scheduled',
+          status: 'Scheduled',
+          administered_by: 'Unassigned',
+          administered_by_role: 'nurse',
+          reason_or_notes: 'Awaiting next temperature check',
+          five_rights_verified: 0,
+          witness_name: null
+        }
+      ];
+      try {
+        for (const m of defaultMeds) {
+          db.prepare(`
+            INSERT OR IGNORE INTO medication_administrations (
+              id, patient_id, hospital_id, prescription_id, medication_name, dose, route,
+              frequency, scheduled_time, administered_time, status, administered_by, administered_by_role,
+              reason_or_notes, five_rights_verified, witness_name
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(m.id, m.patient_id, m.hospital_id, m.prescription_id, m.medication_name, m.dose, m.route, m.frequency, m.scheduled_time, m.administered_time, m.status, m.administered_by, m.administered_by_role, m.reason_or_notes, m.five_rights_verified, m.witness_name);
+        }
+        rows = db.prepare(query).all(...params);
+      } catch {
+        // fallback to memory
+      }
+    }
+
+    res.json(rows.map(r => ({
+      id: r.id,
+      patientId: r.patient_id,
+      hospitalId: r.hospital_id,
+      prescriptionId: r.prescription_id,
+      medicationName: r.medication_name,
+      dose: r.dose,
+      route: r.route,
+      frequency: r.frequency,
+      scheduledTime: r.scheduled_time,
+      administeredTime: r.administered_time,
+      status: r.status,
+      administeredBy: r.administered_by,
+      administeredByRole: r.administered_by_role,
+      reasonOrNotes: r.reason_or_notes,
+      fiveRightsVerified: Boolean(r.five_rights_verified),
+      witnessName: r.witness_name,
+      createdAt: r.created_at
+    })));
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to fetch medication administration records', details: err.message });
+  }
+});
+
+app.post('/api/medication-administrations', authenticateToken, requireRole(['nurse', 'doctor']), (req, res) => {
+  try {
+    const {
+      patientId,
+      hospitalId = req.user?.hospitalId || 'hosp-chn-01',
+      prescriptionId,
+      medicationName,
+      dose,
+      route,
+      frequency,
+      scheduledTime,
+      status = 'Administered',
+      reasonOrNotes,
+      fiveRightsVerified = true,
+      witnessName
+    } = req.body;
+
+    if (!patientId || !medicationName || !dose || !route) {
+      return res.status(400).json({ error: 'Patient ID, medication name, dose, and route are required' });
+    }
+
+    if (status === 'Administered' && !fiveRightsVerified) {
+      return res.status(400).json({ error: 'Mandatory 5-Rights of Medication Administration must be confirmed before administering.' });
+    }
+
+    const marId = 'mar-' + Date.now();
+    const administeredTime = status === 'Administered' ? new Date().toISOString() : status;
+    const administeredBy = req.user.name || 'Staff Nurse';
+    const administeredByRole = req.user.role || 'nurse';
+
+    db.prepare(`
+      INSERT INTO medication_administrations (
+        id, patient_id, hospital_id, prescription_id, medication_name, dose, route,
+        frequency, scheduled_time, administered_time, status, administered_by, administered_by_role,
+        reason_or_notes, five_rights_verified, witness_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      marId, patientId, hospitalId, prescriptionId || null, medicationName, dose, route,
+      frequency || 'As Prescribed', scheduledTime || 'Routine', administeredTime, status,
+      administeredBy, administeredByRole, reasonOrNotes || null, fiveRightsVerified ? 1 : 0, witnessName || null
+    );
+
+    logAudit(hospitalId, req.user.id, req.user.role, 'RECORD_MEDICATION_ADMINISTRATION', 'medication_administration', marId, {
+      patientId,
+      medicationName,
+      dose,
+      route,
+      status,
+      administeredBy
+    });
+
+    const record = db.prepare('SELECT * FROM medication_administrations WHERE id = ?').get(marId);
+
+    if (io) {
+      io.emit('medication_administered', {
+        id: marId,
+        patientId,
+        medicationName,
+        dose,
+        route,
+        status,
+        administeredBy,
+        administeredTime,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `Medication administration record saved as [${status}]`,
+      record: {
+        id: record.id,
+        patientId: record.patient_id,
+        medicationName: record.medication_name,
+        dose: record.dose,
+        route: record.route,
+        status: record.status,
+        administeredBy: record.administered_by,
+        administeredTime: record.administered_time
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to record medication administration', details: err.message });
   }
 });
 

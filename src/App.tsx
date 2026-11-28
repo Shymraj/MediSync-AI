@@ -456,12 +456,45 @@ export const AppContent: React.FC = () => {
       );
     }
 
-    // Determine target role from URL or user profile
+    // Strict RBAC Route Guard: Users cannot access another role's dashboard by typing a URL
+    const userRole = (user?.role as 'admin' | 'doctor' | 'nurse' | 'patient') || 'admin';
     const pathParts = currentPath.split('/');
-    const urlRole = pathParts[2] as any;
-    const activeRole: any = (urlRole && ['admin', 'doctor', 'nurse', 'patient'].includes(urlRole))
-      ? urlRole
-      : (currentPath.startsWith('/doctor') ? 'doctor' : (user?.role || 'admin'));
+    const requestedUrlRole = pathParts[2] as any;
+
+    let activeRole: 'admin' | 'doctor' | 'nurse' | 'patient' = userRole;
+
+    if (requestedUrlRole && ['admin', 'doctor', 'nurse', 'patient'].includes(requestedUrlRole)) {
+      if (userRole === 'admin') {
+        activeRole = requestedUrlRole;
+      } else if (requestedUrlRole !== userRole) {
+        // Redirect unauthorized role navigation back to authorized dashboard
+        navigateTo(`/dashboard/${userRole}`);
+        activeRole = userRole;
+      } else {
+        activeRole = userRole;
+      }
+    } else if (currentPath.startsWith('/doctor')) {
+      if (userRole !== 'doctor' && userRole !== 'admin') {
+        navigateTo(`/dashboard/${userRole}`);
+        activeRole = userRole;
+      } else {
+        activeRole = 'doctor';
+      }
+    } else if (currentPath.startsWith('/nurse')) {
+      if (userRole !== 'nurse' && userRole !== 'admin') {
+        navigateTo(`/dashboard/${userRole}`);
+        activeRole = userRole;
+      } else {
+        activeRole = 'nurse';
+      }
+    } else {
+      activeRole = userRole;
+    }
+
+    if (userRole === 'patient' && activeRole !== 'patient') {
+      navigateTo('/dashboard/patient');
+      return null;
+    }
 
     let effectiveTab = currentTab;
     if (activeRole === 'doctor') {
@@ -471,6 +504,17 @@ export const AppContent: React.FC = () => {
         effectiveTab = queryTab;
       } else if (currentPath.startsWith('/doctor/')) {
         const subRoute = currentPath.replace('/doctor/', '').replace(/-/g, '_');
+        effectiveTab = subRoute || 'dashboard';
+      } else {
+        effectiveTab = currentTab || 'dashboard';
+      }
+    } else if (activeRole === 'nurse') {
+      const hashParams = typeof window !== 'undefined' ? new URLSearchParams((window.location.hash.split('?')[1] || '')) : null;
+      const queryTab = hashParams?.get('tab');
+      if (queryTab) {
+        effectiveTab = queryTab;
+      } else if (currentPath.startsWith('/nurse/')) {
+        const subRoute = currentPath.replace('/nurse/', '').replace(/-/g, '_');
         effectiveTab = subRoute || 'dashboard';
       } else {
         effectiveTab = currentTab || 'dashboard';
@@ -507,18 +551,29 @@ export const AppContent: React.FC = () => {
         : currentTab;
     }
 
+    const handleSelectTab = (tab: string) => {
+      setCurrentTab(tab);
+      if (activeRole === 'nurse') {
+        window.location.hash = `#/dashboard/nurse?tab=${tab}`;
+      } else if (activeRole === 'doctor') {
+        window.location.hash = `#/dashboard/doctor?tab=${tab}`;
+      } else if (activeRole === 'admin') {
+        window.location.hash = `#/dashboard/admin?tab=${tab}`;
+      }
+    };
+
     const renderDashboardByRole = () => {
       switch (activeRole) {
         case 'admin':
-          return <AdminDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
+          return <AdminDashboard activeTab={effectiveTab} onSelectTab={handleSelectTab} />;
         case 'doctor':
-          return <DoctorDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
+          return <DoctorDashboard activeTab={effectiveTab} onSelectTab={handleSelectTab} />;
         case 'nurse':
-          return <NurseDashboard activeTab={effectiveTab} />;
+          return <NurseDashboard activeTab={effectiveTab} onSelectTab={handleSelectTab} />;
         case 'patient':
           return <PatientDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
         default:
-          return <AdminDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
+          return <AdminDashboard activeTab={effectiveTab} onSelectTab={handleSelectTab} />;
       }
     };
 
@@ -566,6 +621,23 @@ export const AppContent: React.FC = () => {
         };
         if (doctorSubtitles[effectiveTab]) {
           return doctorSubtitles[effectiveTab];
+        }
+      }
+
+      if (activeRole === 'nurse') {
+        const nurseSubtitles: Record<string, string> = {
+          dashboard: 'Ward overview — real-time inpatient census, bed occupancy, doctor orders, and early warning alerts.',
+          command_center: 'Real-time emergency command telemetry, triage matching, and coordinated live resus response.',
+          simulation_lab: 'Hospital digital twin stress testing, ward readiness, and sterile supply preparation checklist.',
+          workflow_automation: 'Intelligent hospital workflows, nursing automation protocols, and clinical authorization gates.',
+          ward: 'Inpatient census for ICU Block A & B — bedside monitoring, nursing assessments, care plans, and I/O tracking.',
+          turnaround: 'Institutional 6-stage bed lifecycle tracker ensuring rapid, verified turnover from discharge to ready.',
+          tasks: 'Closed-loop clinical orders, medication administration, vitals recording, and diagnostic sample collection.',
+          equipment: 'Bedside life-support device telemetry, operational checklists, calibration tracking, and fault reporting.',
+          handover: 'Structured SBAR clinical shift handover protocol ensuring seamless continuity of patient care.'
+        };
+        if (nurseSubtitles[effectiveTab]) {
+          return nurseSubtitles[effectiveTab];
         }
       }
 
@@ -663,6 +735,28 @@ export const AppContent: React.FC = () => {
         }
         if (doctorTitles[effectiveTab]) {
           return doctorTitles[effectiveTab];
+        }
+      }
+
+      if (activeRole === 'nurse') {
+        const nurseTitles: Record<string, string> = {
+          dashboard: 'Ward Overview',
+          overview: 'Ward Overview',
+          command_center: 'Emergency Command Center',
+          simulation_lab: 'Digital Twin & Ward Prep',
+          workflow_automation: 'Automated Tasks & Workflows',
+          ward: 'My Ward (ICU Block A/B)',
+          turnaround: 'Bed Turnaround (6-Stage)',
+          tasks: 'Clinical & Cleaning Tasks',
+          equipment: 'Equipment Checklist',
+          handover: 'Shift Handover Log'
+        };
+        const norm = (effectiveTab || '').replace(/-/g, '_');
+        if (nurseTitles[norm]) {
+          return nurseTitles[norm];
+        }
+        if (nurseTitles[effectiveTab]) {
+          return nurseTitles[effectiveTab];
         }
       }
 

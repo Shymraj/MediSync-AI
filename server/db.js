@@ -15,6 +15,10 @@ try {
   db.pragma('busy_timeout = 10000');
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('cache_size = -64000');
+  db.pragma('temp_store = MEMORY');
+  db.pragma('mmap_size = 268435456');
 } catch (err) {
   // Pragma configuration warning
 }
@@ -702,6 +706,76 @@ export function initDatabase() {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (hospital_id) REFERENCES hospitals(id)
     );
+
+    -- 27. Medication Administration Records (MAR)
+    CREATE TABLE IF NOT EXISTS medication_administrations (
+      id TEXT PRIMARY KEY,
+      patient_id TEXT NOT NULL,
+      hospital_id TEXT NOT NULL,
+      prescription_id TEXT,
+      medication_name TEXT NOT NULL,
+      dose TEXT NOT NULL,
+      route TEXT NOT NULL,
+      frequency TEXT,
+      scheduled_time TEXT,
+      administered_time TEXT NOT NULL,
+      status TEXT NOT NULL,
+      administered_by TEXT NOT NULL,
+      administered_by_role TEXT NOT NULL,
+      reason_or_notes TEXT,
+      five_rights_verified INTEGER DEFAULT 1,
+      witness_name TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (hospital_id) REFERENCES hospitals(id)
+    );
+
+    -- 28. Shift Handovers (SBAR Protocol)
+    CREATE TABLE IF NOT EXISTS shift_handovers (
+      id TEXT PRIMARY KEY,
+      hospital_id TEXT NOT NULL,
+      ward TEXT NOT NULL,
+      outgoing_nurse TEXT NOT NULL,
+      incoming_nurse TEXT NOT NULL,
+      shift_type TEXT NOT NULL,
+      patient_count INTEGER,
+      critical_patients TEXT,
+      situation TEXT,
+      background TEXT,
+      assessment TEXT,
+      recommendation TEXT,
+      notes TEXT,
+      checklist_completed INTEGER DEFAULT 1,
+      narcotics_count_verified INTEGER DEFAULT 1,
+      crash_cart_checked INTEGER DEFAULT 1,
+      status TEXT DEFAULT 'Pending Acknowledgment',
+      acknowledged_by TEXT,
+      acknowledged_at TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (hospital_id) REFERENCES hospitals(id)
+    );
+
+    -- 29. Hospital Resource Registry & Medical Supplies
+    CREATE TABLE IF NOT EXISTS hospital_resources (
+      id TEXT PRIMARY KEY,
+      resource_id TEXT UNIQUE NOT NULL,
+      hospital_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      category TEXT NOT NULL,
+      department TEXT NOT NULL,
+      quantity INTEGER DEFAULT 1,
+      available_quantity INTEGER DEFAULT 1,
+      minimum_threshold INTEGER DEFAULT 5,
+      unit TEXT DEFAULT 'Units',
+      status TEXT DEFAULT 'Available',
+      location TEXT,
+      responsible_staff TEXT,
+      expiry_date TEXT,
+      description TEXT,
+      last_updated TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (hospital_id) REFERENCES hospitals(id)
+    );
   `);
 
   // Migrate any existing columns on legacy tables
@@ -709,6 +783,10 @@ export function initDatabase() {
   ensureColumn('hospital_beds', 'assigned_doctor', 'TEXT');
   ensureColumn('hospital_beds', 'equipment', 'TEXT');
   ensureColumn('hospital_beds', 'status_history', 'TEXT');
+  ensureColumn('hospital_beds', 'turnaround_stage', 'TEXT');
+  ensureColumn('hospital_beds', 'turnaround_updated_by', 'TEXT');
+  ensureColumn('hospital_beds', 'cleaning_checklist', 'TEXT');
+  ensureColumn('hospital_beds', 'biomedical_checklist', 'TEXT');
 
   ensureColumn('equipment', 'type', 'TEXT');
   ensureColumn('equipment', 'location', 'TEXT');
@@ -743,6 +821,31 @@ export function initDatabase() {
   ensureColumn('admissions', 'doctor_id', 'TEXT');
   ensureColumn('admissions', 'triage_priority', 'TEXT');
   ensureColumn('admissions', 'admitted_by', 'TEXT');
+
+  ensureColumn('emergency_incidents', 'is_simulated', 'INTEGER DEFAULT 0');
+
+  // Phase 23: Secondary Performance Indexes for High-Concurrency Hospital Operations
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_beds_hospital_status ON hospital_beds (hospital_id, status);
+    CREATE INDEX IF NOT EXISTS idx_beds_patient ON hospital_beds (patient_id);
+    CREATE INDEX IF NOT EXISTS idx_beds_ward ON hospital_beds (ward);
+    CREATE INDEX IF NOT EXISTS idx_equipment_hospital_status ON equipment (hospital_id, status);
+    CREATE INDEX IF NOT EXISTS idx_equipment_serial ON equipment (serial_number);
+    CREATE INDEX IF NOT EXISTS idx_hospital_resources_query ON hospital_resources (hospital_id, category, status);
+    CREATE INDEX IF NOT EXISTS idx_requests_hospital_status ON resource_requests (hospital_id, status);
+    CREATE INDEX IF NOT EXISTS idx_requests_requester ON resource_requests (requester_id);
+    CREATE INDEX IF NOT EXISTS idx_patients_hospital ON patients (hospital_id, admission_date);
+    CREATE INDEX IF NOT EXISTS idx_observations_patient ON patient_observations (patient_id, recorded_at);
+    CREATE INDEX IF NOT EXISTS idx_alerts_hospital_status ON clinical_alerts (hospital_id, status);
+    CREATE INDEX IF NOT EXISTS idx_tasks_hospital_status ON clinical_tasks (hospital_id, status);
+    CREATE INDEX IF NOT EXISTS idx_notifications_hospital ON notifications (hospital_id, read);
+    CREATE INDEX IF NOT EXISTS idx_audit_hospital_created ON audit_logs (hospital_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_emergency_hospital_status ON emergency_incidents (hospital_id, status);
+    CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
+    CREATE INDEX IF NOT EXISTS idx_users_hospital_role ON users (hospital_id, role);
+    CREATE INDEX IF NOT EXISTS idx_admissions_hospital_patient ON admissions (hospital_id, patient_id);
+    CREATE INDEX IF NOT EXISTS idx_transfers_hospital_status ON patient_transfers (hospital_id, status);
+  `);
 
   seedInitialData();
 }
@@ -1955,6 +2058,49 @@ function seedInitialData() {
 
     for (const imp of initialImports) {
       insertImp.run(...imp);
+    }
+  }
+
+  // 29. Seed Hospital Resources & Medical Supplies
+  const resTableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='hospital_resources'").get();
+  if (resTableExists) {
+    const resCount = db.prepare('SELECT COUNT(*) as count FROM hospital_resources').get().count;
+    if (resCount === 0) {
+      const insertRes = db.prepare(`
+        INSERT INTO hospital_resources (
+          id, resource_id, hospital_id, name, category, department,
+          quantity, available_quantity, minimum_threshold, unit,
+          status, location, responsible_staff, expiry_date, description, last_updated
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      const initialResData = [
+        ['res-01', 'RES-EQP-101', 'hosp-chn-01', 'Mechanical Ventilator (Dräger Evita V500)', 'Medical Equipment', 'ICU Complex', 14, 10, 3, 'Units', 'Partially Available', 'ICU Block A Bay 3', 'Dr. Sundaramoorthy M.', '2029-12-31', 'High-end invasive & non-invasive ventilator with integrated lung protective telemetry.', 'Today, 11:15 AM'],
+        ['res-02', 'RES-EQP-102', 'hosp-chn-01', 'Multipara Vital Signs Monitor (Philips IntelliVue MX750)', 'Medical Equipment', 'Emergency', 28, 22, 5, 'Units', 'Partially Available', 'Triage Bay 1-4', 'Nurse Rajeshwari K.', '2028-06-30', '15-inch bedside touch monitor tracking ECG, SpO2, NIBP, temperature, and EtCO2.', 'Today, 10:45 AM'],
+        ['res-03', 'RES-EQP-103', 'hosp-chn-01', 'Biphasic Defibrillator with External Pacing (Zoll R Series)', 'Medical Equipment', 'Cardiology', 8, 6, 2, 'Units', 'Partially Available', 'Cath Lab & Step-down', 'Dr. Sundaramoorthy M.', '2028-10-15', 'Code-ready clinical defibrillator with CPR feedback sensor and pediatric paddle set.', 'Today, 09:30 AM'],
+        ['res-04', 'RES-EQP-104', 'hosp-chn-01', 'Mobile Digital Radiography X-Ray Unit (Siemens Mobilett)', 'Medical Equipment', 'Emergency', 3, 1, 1, 'Units', 'Partially Available', 'Radiology Depot', 'Dr. Alex Rivera', '2030-01-01', 'Cordless motorized mobile digital X-Ray system for bedside and trauma imaging.', 'Today, 08:50 AM'],
+        ['res-05', 'RES-EQP-105', 'hosp-chn-01', 'Volumetric Infusion Syringe Pump (Fresenius Kabi Injectomat)', 'Medical Equipment', 'ICU Complex', 45, 38, 10, 'Units', 'Partially Available', 'ICU Central Store', 'Nurse Deepa R.', '2028-04-12', 'Micro-dose precision infusion syringe pump for vasoactive and sedative infusions.', 'Today, 11:00 AM'],
+        ['res-06', 'RES-EQP-106', 'hosp-chn-01', 'Hemodialysis Machine (Fresenius 4008S Classic)', 'Medical Equipment', 'Cardiology', 6, 0, 1, 'Units', 'In Use', 'Nephrology Suite', 'Dr. Vasanth Kumar', '2029-05-20', 'Dialysis unit with automated volumetric ultrafiltration and bicarbonate dialysis.', 'Today, 07:45 AM'],
+        ['res-07', 'RES-EQP-107', 'hosp-chn-01', 'Anesthesia Workstation (Mindray A7)', 'Medical Equipment', 'Bio-Medical Unit', 5, 0, 1, 'Units', 'Under Maintenance', 'OT Biomedical Workshop', 'Lead Biomed Tech', '2027-11-30', 'Integrated digital gas mixer with electronic vaporizer and agent monitoring.', 'Today, 06:30 AM'],
+        ['res-08', 'RES-EMG-201', 'hosp-chn-01', 'Rapid Fluid Infusion Trauma Resuscitation Kits', 'Emergency Supplies', 'Emergency', 25, 18, 5, 'Kits', 'Partially Available', 'Trauma Bay Red Zone', 'Nurse Rajeshwari K.', '2027-08-31', 'High-flow pressure infusion sleeves, macro-bore tubing, and rapid blood warming line.', 'Today, 10:20 AM'],
+        ['res-09', 'RES-EMG-202', 'hosp-chn-01', 'Medical Grade Oxygen Cylinders (D-Type 47 Liters)', 'Emergency Supplies', 'General Ward', 60, 48, 15, 'Cylinders', 'Available', 'Central Gas Depot', 'Biomedical Ops', '2031-12-31', 'Pressurized O2 cylinders with regulator, pin-index safety system, and flowmeter.', 'Today, 09:15 AM'],
+        ['res-10', 'RES-EMG-203', 'hosp-chn-01', 'Emergency Surgical Cricothyrotomy & Airway Sets', 'Emergency Supplies', 'Emergency', 15, 12, 4, 'Kits', 'Available', 'Crash Cart Top Tray', 'Dr. Alex Rivera', '2027-09-15', 'Single-use sterile rapid airway access cannula with dilator and 6.0mm cuffed tube.', 'Today, 10:10 AM'],
+        ['res-11', 'RES-EMG-204', 'hosp-chn-01', 'Automated External Defibrillator (AED) Adult Pads', 'Emergency Supplies', 'Emergency', 20, 0, 5, 'Pairs', 'Out of Stock', 'Emergency Supply Closet', 'Nurse Deepa R.', '2026-10-31', 'Pre-gelled disposable defibrillation electrode pads for public access AED units.', 'Today, 08:00 AM'],
+        ['res-12', 'RES-ICU-301', 'hosp-chn-01', 'Arterial Blood Gas (ABG) Sensor Cartridges', 'ICU Resources', 'ICU Complex', 50, 35, 10, 'Cartridges', 'Partially Available', 'ICU Point-of-Care Lab', 'Nurse Deepa R.', '2027-03-31', 'Point-of-care ABG cartridges analyzing pH, pCO2, pO2, electrolytes, and lactate.', 'Today, 11:05 AM'],
+        ['res-13', 'RES-ICU-302', 'hosp-chn-01', 'Triple-Lumen Central Venous Catheter (CVC) Trays', 'ICU Resources', 'ICU Complex', 30, 24, 6, 'Trays', 'Available', 'ICU Sterile Supply Rm', 'Dr. Sundaramoorthy M.', '2027-12-31', '7 French 20cm antimicrobial polyurethane central line insertion kit with Seldinger wire.', 'Today, 10:35 AM'],
+        ['res-14', 'RES-ICU-303', 'hosp-chn-01', 'Intra-Aortic Balloon Pump (IABP) Catheters (8 Fr 40cc)', 'ICU Resources', 'Cardiology', 10, 7, 2, 'Units', 'Partially Available', 'Cath Lab Sterile Room', 'Dr. Sundaramoorthy M.', '2028-02-28', 'Percutaneous counterpulsation balloon catheter for cardiogenic shock support.', 'Today, 09:40 AM'],
+        ['res-15', 'RES-ICU-304', 'hosp-chn-01', 'Continuous Renal Replacement Therapy (CRRT) Tubing Sets', 'ICU Resources', 'ICU Complex', 8, 5, 2, 'Sets', 'Partially Available', 'Dialysis Storage Shelf', 'Nurse Priya M.', '2027-06-30', 'Pre-assembled extracorporeal hemofiltration circuit with AN69 membrane.', 'Today, 08:30 AM'],
+        ['res-16', 'RES-GEN-401', 'hosp-chn-01', 'Hospital Grade Terminal Disinfectant Solution (5L Canister)', 'General Hospital Supplies', 'Central Pharmacy', 80, 65, 15, 'Canisters', 'Available', 'Housekeeping Depot', 'Housekeeping Lead', '2028-11-30', 'EPA-registered broad-spectrum virucidal and sporicidal sanitizing solution.', 'Today, 07:15 AM'],
+        ['res-17', 'RES-GEN-402', 'hosp-chn-01', 'Sterile Surgical Gloves & Clinical PPE Bundles', 'General Hospital Supplies', 'Central Pharmacy', 120, 95, 25, 'Boxes', 'Available', 'Central Pharmacy Shelf A', 'Store Pharmacist', '2028-09-30', 'Powder-free latex-free surgical gloves and Level-3 fluid-resistant barrier gowns.', 'Today, 09:00 AM'],
+        ['res-18', 'RES-GEN-403', 'hosp-chn-01', 'Disposable Closed Suction Catheters (14 Fr)', 'General Hospital Supplies', 'General Ward', 150, 110, 30, 'Units', 'Available', 'Ward 4 Clean Utility', 'Nurse Revathi S.', '2028-05-31', '24-hour closed tracheostomy suction system with viral isolation filter sleeve.', 'Today, 10:00 AM'],
+        ['res-19', 'RES-PCR-501', 'hosp-chn-01', 'Powered Alternating Pressure Air Mattress (Anti-Decubitus)', 'Patient Care Resources', 'General Ward', 20, 15, 3, 'Units', 'Partially Available', 'General Ward Storage', 'Nurse Rajeshwari K.', '2030-01-01', 'Medical mattress overlay system preventing Stage 1-4 pressure ulcer formation.', 'Today, 10:50 AM'],
+        ['res-20', 'RES-PCR-502', 'hosp-chn-01', 'LED Overhead Neonatal Phototherapy System', 'Patient Care Resources', 'Pediatrics', 6, 4, 1, 'Units', 'Partially Available', 'NICU Bay 2', 'Dr. K. Annamalai', '2029-07-31', 'High-intensity blue LED phototherapy unit for neonatal hyperbilirubinemia.', 'Today, 09:25 AM'],
+        ['res-21', 'RES-PCR-503', 'hosp-chn-01', 'Heavy-Duty Bariatric Patient Transport Wheelchair', 'Patient Care Resources', 'Emergency', 18, 12, 3, 'Units', 'Partially Available', 'ER Ambulance Bay', 'Patient Transport Lead', '2031-01-01', 'Reinforced steel frame transport wheelchair with swing-away elevating footrests.', 'Today, 08:15 AM']
+      ];
+
+      for (const r of initialResData) {
+        insertRes.run(...r);
+      }
     }
   }
 

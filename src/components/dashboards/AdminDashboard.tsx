@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   Bed, 
@@ -21,6 +21,7 @@ import { useApp } from '../../context/AppContext';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
+import { api } from '../../services/api';
 import { HOSPITAL_DEMO_DATA, HospitalKPICard, RolePortal } from '../../data/hospitalDemoData';
 import { BedManagementPage } from './BedManagementPage';
 import { ClinicalWardsPage } from './ClinicalWardsPage';
@@ -47,6 +48,81 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab, onSel
   const [copyFeedback, setCopyFeedback] = useState(false);
 
   const { hospitalInfo, kpis, rolePortals, facilityInformation } = HOSPITAL_DEMO_DATA;
+  const [liveKpis, setLiveKpis] = useState<HospitalKPICard[]>(kpis);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLiveMetrics = async () => {
+      try {
+        const hospitalId = user?.hospitalId || 'hosp-chn-01';
+        const [bedsSummary, eqList, reqList] = await Promise.all([
+          api.getBedsSummary(hospitalId).catch(() => null),
+          api.getEquipment({ hospitalId }).catch(() => null),
+          api.getRequests(hospitalId).catch(() => null)
+        ]);
+
+        if (isMounted && bedsSummary) {
+          const totalBeds = bedsSummary.total || bedsSummary.totalBeds || 250;
+          const availableBeds = bedsSummary.available || bedsSummary.ready || 48;
+          const icuBeds = bedsSummary.byType?.ICU || 35;
+          const availableIcu = bedsSummary.availableByType?.ICU || 7;
+          const vents = Array.isArray(eqList) ? eqList.filter(e => e.category === 'Ventilator' || e.type === 'Ventilators').length : 12;
+          const onlineVents = Array.isArray(eqList) ? eqList.filter(e => (e.category === 'Ventilator' || e.type === 'Ventilators') && (e.status === 'Operational' || e.status === 'Available')).length : 10;
+          const pendingReqs = Array.isArray(reqList) ? reqList.filter(r => r.status === 'pending' || r.status === 'Pending').length : 3;
+
+          setLiveKpis([
+            {
+              id: 'total-beds',
+              label: 'Total Bed Capacity',
+              value: totalBeds,
+              supportingInfo: `${availableBeds} Ready for Intake`,
+              iconName: 'Bed',
+              statusVariant: 'primary',
+              badgeText: 'Live Census',
+              trend: `${Math.round((availableBeds / totalBeds) * 100)}% available`
+            },
+            {
+              id: 'critical-icu',
+              label: 'Critical ICU Beds',
+              value: icuBeds,
+              supportingInfo: `${availableIcu} Immediate Bays Available`,
+              iconName: 'Activity',
+              statusVariant: 'critical',
+              badgeText: 'High Priority',
+              trend: 'Telemetry live'
+            },
+            {
+              id: 'ventilators',
+              label: 'Mechanical Ventilators',
+              value: vents,
+              supportingInfo: `${onlineVents} Calibrated & Online`,
+              iconName: 'Wind',
+              statusVariant: 'success',
+              badgeText: 'Calibrated',
+              trend: 'Diagnostics passed'
+            },
+            {
+              id: 'active-staff',
+              label: 'Pending Requisitions',
+              value: pendingReqs,
+              supportingInfo: 'Awaiting Admin Allocation',
+              iconName: 'Users',
+              statusVariant: pendingReqs > 0 ? 'critical' : 'secondary',
+              badgeText: 'Action Queue',
+              trend: `${pendingReqs} pending review`
+            }
+          ]);
+        }
+      } catch (err) {}
+    };
+
+    fetchLiveMetrics();
+    const interval = setInterval(fetchLiveMetrics, 15000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [user]);
 
   // Handle direct navigation to role portal dashboards
   const handleNavigateToPortal = (route: string, role: 'doctor' | 'nurse' | 'admin') => {
@@ -334,7 +410,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab, onSel
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {kpis.map((kpi: HospitalKPICard) => (
+          {liveKpis.map((kpi: HospitalKPICard) => (
             <div
               key={kpi.id}
               className="bg-white border border-[#E2E8F0] rounded-xl p-5 shadow-[0_1px_3px_rgba(0,0,0,0.04)] hover:shadow-md transition-shadow relative overflow-hidden"

@@ -34,6 +34,8 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
+import { useApp } from '../../context/AppContext';
+import { api } from '../../services/api';
 import { 
   INITIAL_REQUESTS, 
   ResourceRequestItem, 
@@ -87,6 +89,8 @@ interface ResourceRequestsPageProps {
 }
 
 export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSelectTab }) => {
+  const { user } = useApp();
+
   // 1. Live Requests State with localStorage persistence
   const [requests, setRequests] = useState<ResourceRequestItem[]>(() => {
     try {
@@ -100,6 +104,66 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
     }
     return INITIAL_REQUESTS;
   });
+
+  // Fetch live requests from backend
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLiveRequests = async () => {
+      try {
+        const hospitalId = user?.hospitalId || 'hosp-chn-01';
+        const live = await api.getRequests(hospitalId);
+        if (isMounted && Array.isArray(live) && live.length > 0) {
+          setRequests(prev => {
+            const mappedLive: ResourceRequestItem[] = live.map(r => {
+              const statusCapitalized = (r.status ? r.status.charAt(0).toUpperCase() + r.status.slice(1).toLowerCase() : 'Pending') as RequestStatus;
+              return {
+                id: r.id,
+                requestId: r.requestId || r.id,
+                requestedBy: r.requestedBy || 'Dr. Alex Rivera',
+                doctorEmail: r.doctorEmail || 'doctor@hospital.gov.in',
+                doctorPhone: r.doctorPhone || '044-25305112',
+                department: r.department || 'Emergency',
+                ward: r.ward || 'Emergency Ward',
+                resourceType: (r.resourceType as any) || 'Medical Equipment',
+                resourceName: r.resourceName || 'Emergency Supply',
+                quantity: r.quantity || 1,
+                unit: r.unit || 'Units',
+                priority: (r.priority as RequestPriority) || 'Urgent',
+                requestDate: r.createdAt ? new Date(r.createdAt).toLocaleDateString() : 'Today',
+                status: statusCapitalized,
+                reason: r.reason || 'Urgent clinical need',
+                allocatedResourceId: r.allocatedResourceId,
+                allocatedResourceName: r.allocatedResourceName,
+                allocatedQuantity: r.allocatedQuantity,
+                rejectionReason: r.rejectionReason,
+                timeline: Array.isArray(r.timeline) && r.timeline.length > 0 ? r.timeline : [
+                  {
+                    id: 't-init',
+                    timestamp: 'Just now',
+                    action: 'Submitted',
+                    actor: r.requestedBy || 'Doctor',
+                    notes: `Requisition submitted: ${r.quantity || 1}x ${r.resourceName || 'Resource'}`
+                  }
+                ],
+                patientId: r.patientId,
+                patientName: r.patientName
+              };
+            });
+
+            const liveIds = new Set(mappedLive.map(m => m.id));
+            const customs = prev.filter(p => !liveIds.has(p.id));
+            const merged = [...mappedLive, ...customs];
+            try { localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(merged)); } catch {}
+            return merged;
+          });
+        }
+      } catch (err) {
+        // Fallback
+      }
+    };
+    fetchLiveRequests();
+    return () => { isMounted = false; };
+  }, [user]);
 
   // 2. Shared Resource Registry State (for stock validation & allocation deduction)
   const [registryResources, setRegistryResources] = useState<ResourceItem[]>(() => {
@@ -288,6 +352,9 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
   };
 
   const handleApproveRequest = (item: ResourceRequestItem) => {
+    // Sync with backend API
+    api.updateRequestStatus(item.id, 'Approved').catch(() => {});
+
     const now = 'Just now';
     const updatedTimeline: RequestTimelineEntry[] = [
       ...item.timeline,
@@ -326,6 +393,9 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
       setRejectError('Please provide an official clinical or inventory justification for rejecting this requisition.');
       return;
     }
+
+    // Sync with backend API
+    api.updateRequestStatus(rejectModalRequest.id, 'Rejected', undefined, undefined, cleanReason).catch(() => {});
 
     const now = 'Just now';
     const updatedTimeline: RequestTimelineEntry[] = [
@@ -419,6 +489,8 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
     saveRegistryResources(updatedResources);
 
     // 2. Update Request Status to Allocated
+    api.updateRequestStatus(allocateModalRequest.id, 'Allocated', resource.resourceId, resource.name).catch(() => {});
+
     const now = 'Just now';
     const updatedTimeline: RequestTimelineEntry[] = [
       ...allocateModalRequest.timeline,

@@ -26,6 +26,8 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
+import { useApp } from '../../context/AppContext';
+import { api } from '../../services/api';
 import { 
   INITIAL_BEDS, 
   BedItem, 
@@ -43,6 +45,8 @@ interface BedManagementPageProps {
 }
 
 export const BedManagementPage: React.FC<BedManagementPageProps> = ({ onSelectTab, initialWardFilter }) => {
+  const { user, updateBedStatus: contextUpdateBedStatus } = useApp();
+
   // Primary State: Bed Registry
   const [beds, setBeds] = useState<BedItem[]>(() => {
     try {
@@ -51,6 +55,54 @@ export const BedManagementPage: React.FC<BedManagementPageProps> = ({ onSelectTa
     } catch {}
     return INITIAL_BEDS;
   });
+
+  // Fetch live backend beds on mount
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLiveBeds = async () => {
+      try {
+        const hospitalId = user?.hospitalId || 'hosp-chn-01';
+        const liveBeds = await api.getBeds({ hospitalId });
+        if (isMounted && Array.isArray(liveBeds) && liveBeds.length > 0) {
+          setBeds(prev => {
+            const statusMap: Record<string, BedStatusType> = {
+              'occupied': 'Occupied',
+              'ready': 'Available',
+              'available': 'Available',
+              'cleaning': 'Cleaning',
+              'maintenance': 'Maintenance',
+              'reserved': 'Reserved'
+            };
+            const mappedLive: BedItem[] = liveBeds.map(b => {
+              const existing = prev.find(p => p.id === b.id || p.bedId === b.bed_number);
+              return {
+                id: b.id,
+                bedId: b.bed_number || b.id,
+                ward: (b.ward as WardCategory) || 'General Ward',
+                bedType: (b.type as BedTypeCategory) || 'General',
+                floor: b.floor || '2nd Floor',
+                status: statusMap[b.status?.toLowerCase()] || (b.status as BedStatusType) || 'Available',
+                patient: b.patient_name || 'Unassigned',
+                equipment: b.equipment || 'Wall O2, Telemetry Ready',
+                lastUpdated: b.last_updated || 'Just now',
+                notes: b.notes || '',
+                statusHistory: existing?.statusHistory || []
+              };
+            });
+            const liveIds = new Set(mappedLive.map(m => m.id));
+            const customs = prev.filter(p => !liveIds.has(p.id));
+            const merged = [...mappedLive, ...customs];
+            try { localStorage.setItem('medisync_bed_registry_data', JSON.stringify(merged)); } catch {}
+            return merged;
+          });
+        }
+      } catch (err) {
+        // Fallback to local
+      }
+    };
+    fetchLiveBeds();
+    return () => { isMounted = false; };
+  }, [user]);
 
   // Filters and Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -257,6 +309,20 @@ export const BedManagementPage: React.FC<BedManagementPageProps> = ({ onSelectTa
 
   // Update Bed Status (Requirement 9)
   const handleExecuteStatusUpdate = (targetBedId: string, newStatus: BedStatusType, notes?: string) => {
+    const backendStatusMap: Record<BedStatusType, string> = {
+      'Available': 'ready',
+      'Occupied': 'occupied',
+      'Cleaning': 'cleaning',
+      'Reserved': 'reserved',
+      'Maintenance': 'maintenance'
+    };
+
+    // Sync with backend API & AppContext
+    api.updateBedStatus(targetBedId, backendStatusMap[newStatus] || newStatus.toLowerCase(), notes).catch(() => {});
+    if (contextUpdateBedStatus) {
+      contextUpdateBedStatus(targetBedId, backendStatusMap[newStatus] as any, notes).catch(() => {});
+    }
+
     const updated = beds.map(bed => {
       if (bed.id === targetBedId || bed.bedId === targetBedId) {
         const historyItem: BedHistoryItem = {

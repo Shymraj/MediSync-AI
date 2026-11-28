@@ -21,9 +21,15 @@ describe('MediSync AI - Phase 15 Cross-Dashboard Integration Test Suite', () => 
     assert.equal(bedsRes.status, 200);
     assert.ok(bedsRes.data.length >= 3, 'Must have at least 3 beds');
     
-    // Pick designated test beds
+    // Pick designated test beds and ensure readiness
     readyBedId = 'bed-106';
     testBedForWorkflow2 = 'bed-108';
+
+    await apiRequest(baseUrl, `/api/beds/${readyBedId}/status`, {
+      method: 'PATCH',
+      token: adminToken,
+      body: { status: 'ready', notes: 'Initial test setup readiness' }
+    });
   });
 
   after(async () => {
@@ -289,7 +295,13 @@ describe('MediSync AI - Phase 15 Cross-Dashboard Integration Test Suite', () => 
   // ==========================================
   describe('Workflow 5: Patient Discharge & Bed Turnover Flow', () => {
     it('5.1 Doctor discharges patient, setting bed to cleaning and dispatching nurse turnover task', async () => {
-      // Ensure bed-101 is occupied by PT-8941 so discharge has an explicit baseline
+      // Ensure bed-101 is ready first so discharge has an explicit baseline
+      await apiRequest(baseUrl, '/api/beds/bed-101/status', {
+        method: 'PATCH',
+        token: adminToken,
+        body: { status: 'ready' }
+      });
+
       await apiRequest(baseUrl, '/api/beds/bed-101/status', {
         method: 'PATCH',
         token: adminToken,

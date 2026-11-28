@@ -90,6 +90,9 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [isPriorityModalOpen, setIsPriorityModalOpen] = useState(false);
   const [isAllocateModalOpen, setIsAllocateModalOpen] = useState(false);
+  const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
+  const [resolutionNotes, setResolutionNotes] = useState('');
+  const [releaseBedOnResolve, setReleaseBedOnResolve] = useState(true);
   const [targetIncidentForAction, setTargetIncidentForAction] = useState<EmergencyIncident | null>(null);
 
   // Priority adjustment form
@@ -132,7 +135,11 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
   // Fetch from backend API
   const fetchIncidentsAndAnalytics = async () => {
     try {
+<<<<<<< Updated upstream
       const data = await api.getEmergencyIncidents(getActiveHospitalScopeId());
+=======
+      const data = await api.getEmergencyIncidents('hosp-chn-01', isDemoModeActive);
+>>>>>>> Stashed changes
       if (Array.isArray(data) && data.length > 0) {
         setIncidents(data);
         localStorage.setItem(hospitalScopedKey('medisync_emergency_incidents_cache'), JSON.stringify(data));
@@ -155,7 +162,7 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
     fetchIncidentsAndAnalytics();
     const interval = setInterval(fetchIncidentsAndAnalytics, 15000);
     return () => clearInterval(interval);
-  }, []);
+  }, [isDemoModeActive]);
 
   // Save incidents to localStorage when changed
   useEffect(() => {
@@ -395,36 +402,55 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
       return;
     }
 
-    // 1. Assign patient to the bed
-    assignPatientToBed(
-      recommendedBed.id,
-      targetIncidentForAction.patientName,
-      targetIncidentForAction.patientId || 'PAT-EMG',
-      targetIncidentForAction.assignedDoctorName || 'Dr. Sundaramoorthy M.',
-      targetIncidentForAction.assignedNurseName || 'Nurse Revathi S.'
-    );
+    const isSimulatedIncident = Boolean(targetIncidentForAction.isSimulated || targetIncidentForAction.id.startsWith('SIM-') || targetIncidentForAction.id === 'INC-2026-DEMO');
 
-    // 2. Update bed status to occupied
-    updateBedStatus(recommendedBed.id, 'occupied', `Occupied by Emergency Incident ${targetIncidentForAction.id}`);
+    try {
+      await api.allocateEmergencyResources(targetIncidentForAction.id, {
+        bedId: recommendedBed.id,
+        equipmentId: recommendedVent?.id,
+        allocatedBy: user?.name || 'Dr. Sundaramoorthy M.',
+        notes: `Allocated Bed ${recommendedBed.bedNumber} and equipment.`,
+        isSimulated: isSimulatedIncident
+      });
+    } catch (err: any) {
+      alert(`Resource Allocation Alert: ${err?.message || 'Conflict detected during resource allocation.'}`);
+      return;
+    }
 
-    // 3. Create nurse intake task
-    createDoctorNurseTask({
-      patientId: targetIncidentForAction.patientId || 'PAT-EMG',
-      patientName: targetIncidentForAction.patientName,
-      ward: recommendedBed.ward,
-      bed: recommendedBed.bedNumber,
-      doctorName: targetIncidentForAction.assignedDoctorName || 'Dr. Sundaramoorthy M.',
-      assignedNurse: targetIncidentForAction.assignedNurseName || 'Nurse Revathi S.',
-      taskType: 'Assessment',
-      instruction: `EMERGENCY INTAKE: Continuous invasive hemodynamic monitoring, SpO2 & ECG telemetry. Connect ${recommendedVent ? recommendedVent.name : 'ventilator'} and verify cross-matched blood reserve.`,
-      priority: 'Stat (Immediate)'
-    });
+    if (!isSimulatedIncident) {
+      // 1. Assign patient to the bed
+      assignPatientToBed(
+        recommendedBed.id,
+        targetIncidentForAction.patientName,
+        targetIncidentForAction.patientId || 'PAT-EMG',
+        targetIncidentForAction.assignedDoctorName || 'Dr. Sundaramoorthy M.',
+        targetIncidentForAction.assignedNurseName || 'Nurse Revathi S.'
+      );
+
+      // 2. Update bed status to occupied
+      updateBedStatus(recommendedBed.id, 'occupied', `Occupied by Emergency Incident ${targetIncidentForAction.id}`);
+
+      // 3. Create nurse intake task
+      createDoctorNurseTask({
+        patientId: targetIncidentForAction.patientId || 'PAT-EMG',
+        patientName: targetIncidentForAction.patientName,
+        ward: recommendedBed.ward,
+        bed: recommendedBed.bedNumber,
+        doctorName: targetIncidentForAction.assignedDoctorName || 'Dr. Sundaramoorthy M.',
+        assignedNurse: targetIncidentForAction.assignedNurseName || 'Nurse Revathi S.',
+        taskType: 'Assessment',
+        instruction: `EMERGENCY INTAKE: Continuous invasive hemodynamic monitoring, SpO2 & ECG telemetry. Connect ${recommendedVent ? recommendedVent.name : 'ventilator'} and verify cross-matched blood reserve.`,
+        priority: 'Stat (Immediate)'
+      });
+    }
 
     const newTimelineEvent: EmergencyTimelineEvent = {
       stage: 'Resources Allocated',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       actor: user?.name || 'Hospital Admin & Clinical Director',
-      notes: `Allocated Bed ${recommendedBed.bedNumber} (${recommendedBed.ward})${recommendedVent ? ` and ${recommendedVent.name}` : ''}. Clinical nurse intake dispatched.`
+      notes: isSimulatedIncident
+        ? `[SIMULATED SANDBOX] Simulated Bed ${recommendedBed.bedNumber} assigned. Live hospital beds untouched.`
+        : `Allocated Bed ${recommendedBed.bedNumber} (${recommendedBed.ward})${recommendedVent ? ` and ${recommendedVent.name}` : ''}. Clinical nurse intake dispatched.`
     };
 
     const updatedIncidents = incidents.map(inc => {
@@ -444,37 +470,33 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
     });
 
     setIncidents(updatedIncidents);
-
-    try {
-      await api.allocateEmergencyResources(targetIncidentForAction.id, {
-        bedId: recommendedBed.id,
-        equipmentId: recommendedVent?.id,
-        allocatedBy: user?.name || 'Dr. Sundaramoorthy M.',
-        notes: `Allocated Bed ${recommendedBed.bedNumber} and equipment.`
-      });
-    } catch (err) {
-      // offline fallback
-    }
-
     setIsAllocateModalOpen(false);
-    setActionSuccessMsg(`Resources successfully allocated for Incident ${targetIncidentForAction.id}. Bed ${recommendedBed.bedNumber} marked occupied, nurse alert triggered.`);
+    setActionSuccessMsg(isSimulatedIncident
+      ? `[SIMULATED SANDBOX] Simulated resources allocated for Incident ${targetIncidentForAction.id}.`
+      : `Resources successfully allocated for Incident ${targetIncidentForAction.id}. Bed ${recommendedBed.bedNumber} marked occupied, nurse alert triggered.`
+    );
   };
 
-  // Handle Resolve Incident
-  const handleResolveIncident = async (incident: EmergencyIncident) => {
-    if (!window.confirm(`Confirm resolution of Emergency Incident ${incident.id} for patient ${incident.patientName}?`)) {
-      return;
-    }
+  // Handle Open Resolve Modal
+  const handleOpenResolveModal = (incident: EmergencyIncident) => {
+    setTargetIncidentForAction(incident);
+    setResolutionNotes('Patient stabilized. Transferred to definitive inpatient care. Emergency incident successfully closed.');
+    setReleaseBedOnResolve(true);
+    setIsResolveModalOpen(true);
+  };
+
+  const handleConfirmResolve = async () => {
+    if (!targetIncidentForAction) return;
 
     const resolveEvent: EmergencyTimelineEvent = {
       stage: 'Resolved',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       actor: user?.name || 'Emergency Attending Physician',
-      notes: 'Patient stabilized. Transferred to definitive inpatient care. Emergency incident successfully closed.'
+      notes: resolutionNotes || 'Patient stabilized. Emergency incident successfully closed.'
     };
 
     const updatedIncidents = incidents.map(inc => {
-      if (inc.id === incident.id) {
+      if (inc.id === targetIncidentForAction.id) {
         return {
           ...inc,
           status: 'Resolved' as EmergencyStatus,
@@ -487,14 +509,37 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
 
     setIncidents(updatedIncidents);
 
+    const isSimulatedIncident = Boolean(targetIncidentForAction.isSimulated || targetIncidentForAction.id.startsWith('SIM-') || targetIncidentForAction.id === 'INC-2026-DEMO');
+
+    if (!isSimulatedIncident && releaseBedOnResolve && targetIncidentForAction.allocatedBedId) {
+      updateBedStatus(targetIncidentForAction.allocatedBedId, 'ready', 'Bed released after emergency incident resolution');
+    }
+
     try {
-      await api.resolveEmergencyIncident(incident.id, {
+      await api.resolveEmergencyIncident(targetIncidentForAction.id, {
         resolvedBy: user?.name || 'Dr. Sundaramoorthy M.',
-        notes: 'Emergency stabilized and closed.'
+        notes: resolutionNotes,
+        resolutionSummary: resolutionNotes,
+        releaseBed: releaseBedOnResolve,
+        releaseVentilator: true
       });
     } catch (err) {}
 
-    setActionSuccessMsg(`Emergency Incident ${incident.id} marked as RESOLVED.`);
+    setIsResolveModalOpen(false);
+    setActionSuccessMsg(`Emergency Incident ${targetIncidentForAction.id} marked as RESOLVED.`);
+  };
+
+  // Run Simulation Scenario
+  const handleRunScenario = async (scenario: string) => {
+    try {
+      const res = await api.simulateEmergencyScenario(scenario);
+      if (res && res.message) {
+        setActionSuccessMsg(`[SIMULATION SANDBOX] ${res.message}`);
+        await fetchIncidentsAndAnalytics();
+      }
+    } catch (err: any) {
+      setActionSuccessMsg(`Scenario executed locally in sandbox mode.`);
+    }
   };
 
   // Demo Simulation Runner
@@ -593,22 +638,22 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
         setSelectedIncidentId(demoIncId);
       }
     } else if (nextStep === 4) {
-      // Step 5: Allocate
+      // Step 5: Allocate (Sandbox simulation - live hospital beds untouched)
       const demoInc = incidents.find(i => i.id === 'INC-2026-DEMO');
-      if (demoInc && availableIcuBeds[0]) {
-        updateBedStatus(availableIcuBeds[0].id, 'occupied', 'Occupied by Demo Emergency Incident');
+      if (demoInc) {
         setIncidents(prev => prev.map(i => i.id === 'INC-2026-DEMO' ? {
           ...i,
           status: 'Resources Allocated',
-          allocatedBedId: availableIcuBeds[0].id,
-          allocatedBedNumber: availableIcuBeds[0].bedNumber,
+          allocatedBedId: 'SIM-BED-ICU-02',
+          allocatedBedNumber: 'ICU-02 (Simulated Sandbox)',
+          allocatedEquipmentName: 'Servo-U Ventilator (Simulated)',
           timeline: [
             ...i.timeline,
             {
               stage: 'Resources Allocated',
               timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               actor: 'Dr. Sundaramoorthy M. (Approved)',
-              notes: `Allocated Bed ${availableIcuBeds[0].bedNumber} and Servo-U Ventilator.`
+              notes: '[SIMULATED SANDBOX] Allocated Simulated ICU Bed ICU-02 and Servo-U Ventilator. Production beds untouched.'
             }
           ]
         } : i));
@@ -806,6 +851,41 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
                   <div className="text-[11px] truncate mt-0.5">{st.title.split(':')[1]?.trim() || st.title}</div>
                 </div>
               ))}
+            </div>
+
+            {/* Simulation Scenarios Switcher */}
+            <div className="flex items-center gap-2 mt-4 pt-3 border-t border-purple-800/60 flex-wrap">
+              <span className="text-[11px] font-bold text-purple-300 uppercase tracking-wider flex items-center gap-1">
+                <Sparkles className="w-3.5 h-3.5" /> Sandbox Scenarios:
+              </span>
+              <button
+                type="button"
+                onClick={() => handleRunScenario('mass_casualty')}
+                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600 transition-colors"
+              >
+                🚨 Mass Casualty (MCI)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRunScenario('icu_shortage')}
+                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600 transition-colors"
+              >
+                ⚠️ ICU Shortage Surge
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRunScenario('ventilator_failure')}
+                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-purple-900/80 hover:bg-purple-800 text-purple-200 border border-purple-600 transition-colors"
+              >
+                🔌 Ventilator Failure Alarm
+              </button>
+              <button
+                type="button"
+                onClick={() => handleRunScenario('reset')}
+                className="px-2.5 py-1 rounded-md text-[11px] font-semibold bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-600 transition-colors"
+              >
+                🧹 Clear Sandbox
+              </button>
             </div>
           </div>
         )}
@@ -1085,8 +1165,13 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
                         <td className="py-3.5 px-4">
                           <div className="space-y-1">
                             <div>{getSeverityBadge(incident.severity)}</div>
-                            <div className="text-[11px] font-mono font-bold text-slate-700">
+                            <div className="text-[11px] font-mono font-bold text-slate-700 flex items-center gap-1">
                               {incident.id}
+                              {(incident.isSimulated || incident.id.startsWith('SIM-') || incident.id === 'INC-2026-DEMO') && (
+                                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-purple-100 text-purple-800 border border-purple-300">
+                                  SIMULATED
+                                </span>
+                              )}
                             </div>
                           </div>
                         </td>
@@ -1195,7 +1280,7 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleResolveIncident(incident);
+                                  handleOpenResolveModal(incident);
                                 }}
                                 className="px-2 py-1 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 border border-emerald-200 transition-colors"
                               >
@@ -1927,6 +2012,71 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
               >
                 <CheckCircle2 className="w-4 h-4" />
                 Confirm & Dispatch Allocation
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      {/* 4. CLINICAL RESOLUTION MODAL */}
+      <Modal
+        isOpen={isResolveModalOpen}
+        onClose={() => setIsResolveModalOpen(false)}
+        title="Authorize Emergency Incident Resolution & Sign-Off"
+      >
+        {targetIncidentForAction && (
+          <div className="space-y-4">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 leading-relaxed">
+              <div className="flex items-center gap-2 font-bold mb-1">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                Clinical Case Resolution Authorization
+              </div>
+              Confirming this action marks Incident <strong>{targetIncidentForAction.id}</strong> ({targetIncidentForAction.patientName}) as <strong>Resolved</strong> in the Hospital Command Center. An immutable audit record will be logged with your digital signature.
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase mb-1">
+                Clinical Stabilization Summary & Disposition Notes
+              </label>
+              <textarea
+                value={resolutionNotes}
+                onChange={(e) => setResolutionNotes(e.target.value)}
+                rows={3}
+                placeholder="Document stabilization status, interventions performed, and transfer/discharge destination..."
+                className="w-full text-xs p-3 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-sans"
+              />
+            </div>
+
+            <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-2">
+              <label className="flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={releaseBedOnResolve}
+                  onChange={(e) => setReleaseBedOnResolve(e.target.checked)}
+                  className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Release emergency intake bay for turnaround and new emergency admissions</span>
+              </label>
+              <p className="text-[11px] text-slate-500 pl-6">
+                If the patient is remaining in the bed for long-term inpatient care, uncheck this box to preserve bed occupancy.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setIsResolveModalOpen(false)}
+                className="px-4 py-2 rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-100"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmResolve}
+                className="px-5 py-2 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm flex items-center gap-1.5"
+              >
+                <CheckCircle2 className="w-4 h-4" />
+                Sign & Finalize Resolution
               </button>
             </div>
           </div>

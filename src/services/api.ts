@@ -37,18 +37,38 @@ async function request(endpoint: string, options: any = {}) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(`${API_BASE}${endpoint}`, {
-    ...options,
-    headers
-  });
+  // Phase 23: Request timeout protection & graceful recovery
+  const timeoutMs = options.timeout || 15000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-  const data = await response.json().catch(() => null);
+  try {
+    const response = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers,
+      signal: options.signal || controller.signal
+    });
 
-  if (!response.ok) {
-    throw new Error(data?.error || `API request failed with status ${response.status}`);
+    // Gracefully handle expired or invalid JWT session
+    if (response.status === 401) {
+      setAuthToken(null);
+    }
+
+    const data = await response.json().catch(() => null);
+
+    if (!response.ok) {
+      throw new Error(data?.error || `API request failed with status ${response.status}`);
+    }
+
+    return data;
+  } catch (err: any) {
+    if (err.name === 'AbortError') {
+      throw new Error(`Request timed out after ${timeoutMs}ms for ${endpoint}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
   }
-
-  return data;
 }
 
 export const api = {
@@ -87,6 +107,9 @@ export const api = {
     const qs = new URLSearchParams(params as any).toString();
     return request(`/beds${qs ? `?${qs}` : ''}`);
   },
+
+  getBedsSummary: (hospitalId: string = 'hosp-chn-01') =>
+    request(`/beds/summary?hospitalId=${hospitalId}`),
 
   updateBedStatus: (bedId: string, newStatus: string, notes?: string) => 
     request(`/beds/${bedId}/status`, { method: 'PATCH', body: JSON.stringify({ newStatus, notes }) }),
@@ -131,6 +154,33 @@ export const api = {
   updateRequestStatus: (requestId: string, status: string, allocatedResourceId?: string, allocatedResourceName?: string, rejectionReason?: string) => 
     request(`/requests/${requestId}/status`, { method: 'PATCH', body: JSON.stringify({ status, allocatedResourceId, allocatedResourceName, rejectionReason }) }),
 
+  returnResource: (requestId: string, payload: { returnNotes?: string } = {}) =>
+    request(`/requests/${requestId}/return`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  reportEquipmentFault: (eqId: string, payload: { reportedBy?: string; faultDescription: string; severity?: string }) =>
+    request(`/equipment/${eqId}/fault`, { method: 'POST', body: JSON.stringify(payload) }),
+
+  // Hospital Resource Registry & Medical Supplies
+  getResources: (params: { hospitalId?: string; category?: string; department?: string; status?: string; search?: string } = {}) => {
+    const qs = new URLSearchParams(params as any).toString();
+    return request(`/resources${qs ? `?${qs}` : ''}`);
+  },
+
+  createResource: (payload: any) =>
+    request('/resources', { method: 'POST', body: JSON.stringify(payload) }),
+
+  updateResource: (id: string, payload: any) =>
+    request(`/resources/${id}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+
+  deleteResource: (id: string) =>
+    request(`/resources/${id}`, { method: 'DELETE' }),
+
+  adjustResourceStock: (id: string, payload: { adjustment?: number; quantity?: number; availableQuantity?: number; reason?: string }) =>
+    request(`/resources/${id}/stock`, { method: 'PATCH', body: JSON.stringify(payload) }),
+
+  getResourceIntelligence: (hospitalId: string = 'hosp-chn-01') =>
+    request(`/resources/intelligence?hospitalId=${hospitalId}`),
+
   // Clinical Tasks (Doctor <-> Nurse Communication)
   getClinicalTasks: (params: { hospitalId?: string; patientId?: string; status?: string } = {}) => {
     const qs = new URLSearchParams(params as any).toString();
@@ -170,12 +220,34 @@ export const api = {
   getAuditLogs: () =>
     request('/audit-logs'),
 
+  // Nursing Handovers
+  getHandovers: (hospitalId: string = 'hosp-chn-01', ward?: string) =>
+    request(`/handovers?hospitalId=${hospitalId}${ward ? `&ward=${encodeURIComponent(ward)}` : ''}`),
+
+  getHandoverDraft: (hospitalId: string = 'hosp-chn-01', ward?: string) =>
+    request(`/handovers/draft?hospitalId=${hospitalId}${ward ? `&ward=${encodeURIComponent(ward)}` : ''}`),
+
+  createHandover: (payload: any) =>
+    request('/handovers', { method: 'POST', body: JSON.stringify(payload) }),
+
+  acknowledgeHandover: (handoverId: string, payload: { notes?: string; acknowledgedBy?: string } = {}) =>
+    request(`/handovers/${handoverId}/acknowledge`, { method: 'PATCH', body: JSON.stringify(payload) }),
+
+  // Medication Administration Records (MAR)
+  getMedicationAdministrations: (params: { hospitalId?: string; patientId?: string; status?: string } = {}) => {
+    const qs = new URLSearchParams(params as any).toString();
+    return request(`/medication-administrations${qs ? `?${qs}` : ''}`);
+  },
+
+  recordMedicationAdministration: (payload: any) =>
+    request('/medication-administrations', { method: 'POST', body: JSON.stringify(payload) }),
+
   bookAppointment: (payload: any) => 
     request('/appointments', { method: 'POST', body: JSON.stringify(payload) }),
 
   // Intelligent Emergency Command Center
-  getEmergencyIncidents: (hospitalId: string = 'hosp-chn-01') =>
-    request(`/emergency/incidents?hospitalId=${hospitalId}`),
+  getEmergencyIncidents: (hospitalId: string = 'hosp-chn-01', includeSimulated: boolean = false) =>
+    request(`/emergency/incidents?hospitalId=${hospitalId}${includeSimulated ? '&includeSimulated=true' : ''}`),
 
   getEmergencyAnalytics: (hospitalId: string = 'hosp-chn-01') =>
     request(`/emergency/analytics?hospitalId=${hospitalId}`),
@@ -192,16 +264,22 @@ export const api = {
       body: JSON.stringify({ severity, justification, updatedBy }) 
     }),
 
-  allocateEmergencyResources: (incidentId: string, payload: { bedId?: string; equipmentId?: string; allocatedBy?: string; notes?: string }) =>
+  allocateEmergencyResources: (incidentId: string, payload: { bedId?: string; equipmentId?: string; allocatedBy?: string; notes?: string; isSimulated?: boolean }) =>
     request(`/emergency/incidents/${incidentId}/allocate-resources`, { 
       method: 'POST', 
       body: JSON.stringify(payload) 
     }),
 
-  resolveEmergencyIncident: (incidentId: string, payload: { resolvedBy?: string; notes?: string }) =>
+  resolveEmergencyIncident: (incidentId: string, payload: { resolvedBy?: string; notes?: string; resolutionSummary?: string; releaseBed?: boolean; releaseVentilator?: boolean; bedId?: string }) =>
     request(`/emergency/incidents/${incidentId}/resolve`, { 
       method: 'POST', 
       body: JSON.stringify(payload) 
+    }),
+
+  simulateEmergencyScenario: (scenario: string) =>
+    request('/emergency/simulate-scenario', { 
+      method: 'POST', 
+      body: JSON.stringify({ scenario }) 
     }),
 
   // Predictive Hospital Intelligence & Forecasting

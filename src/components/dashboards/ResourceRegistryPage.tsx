@@ -28,6 +28,7 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
+import { api } from '../../services/api';
 import { 
   INITIAL_RESOURCES, 
   ResourceItem, 
@@ -82,6 +83,33 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
       console.error('Failed to save resources to localStorage:', e);
     }
   };
+
+  // Load live resources from backend API on mount
+  useEffect(() => {
+    let isMounted = true;
+    api.getResources()
+      .then((data: any) => {
+        if (isMounted && Array.isArray(data) && data.length > 0) {
+          const mapped: ResourceItem[] = data.map((d: any) => ({
+            id: d.id,
+            resourceId: d.resource_id || d.resourceId,
+            name: d.name,
+            category: d.category as ResourceCategory,
+            department: d.department,
+            quantity: Number(d.quantity) || 0,
+            availableQuantity: Number(d.available_quantity !== undefined ? d.available_quantity : d.availableQuantity) || 0,
+            status: d.status as ResourceStatus,
+            description: d.description || '',
+            lastUpdated: d.last_updated || d.lastUpdated || 'Just now',
+            unit: d.unit || 'Units'
+          }));
+          setResources(mapped);
+          saveResources(mapped);
+        }
+      })
+      .catch(() => {});
+    return () => { isMounted = false; };
+  }, []);
 
   // 2. Filter & Search State
   const [searchQuery, setSearchQuery] = useState('');
@@ -204,18 +232,41 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
   // Handle Refresh
   const handleRefresh = () => {
     setIsRefreshing(true);
+<<<<<<< Updated upstream
     setTimeout(() => {
       try {
         const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
         if (saved) {
           setResources(JSON.parse(saved));
+=======
+    api.getResources()
+      .then((data: any) => {
+        if (Array.isArray(data) && data.length > 0) {
+          const mapped: ResourceItem[] = data.map((d: any) => ({
+            id: d.id,
+            resourceId: d.resource_id || d.resourceId,
+            name: d.name,
+            category: d.category as ResourceCategory,
+            department: d.department,
+            quantity: Number(d.quantity) || 0,
+            availableQuantity: Number(d.available_quantity !== undefined ? d.available_quantity : d.availableQuantity) || 0,
+            status: d.status as ResourceStatus,
+            description: d.description || '',
+            lastUpdated: d.last_updated || d.lastUpdated || 'Just now',
+            unit: d.unit || 'Units'
+          }));
+          setResources(mapped);
+          saveResources(mapped);
+>>>>>>> Stashed changes
         }
-      } catch {}
-      const now = new Date();
-      setLastRefreshedTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
-      setIsRefreshing(false);
-      showToast('Resource Registry synchronized with hospital inventory.', 'info');
-    }, 400);
+      })
+      .catch(() => {})
+      .finally(() => {
+        const now = new Date();
+        setLastRefreshedTime(now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+        setIsRefreshing(false);
+        showToast('Resource Registry synchronized with hospital inventory.', 'info');
+      });
   };
 
   // Reset to initial demo data
@@ -322,6 +373,7 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
 
     const updatedList = [newResource, ...resources];
     saveResources(updatedList);
+    api.createResource(newResource).catch(() => {});
     setIsAddModalOpen(false);
     showToast(`Added resource "${newResource.name}" (${newResource.resourceId}) to registry.`);
   };
@@ -401,6 +453,16 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
     });
 
     saveResources(updatedList);
+    api.updateResource(activeResource.id, {
+      name: cleanName,
+      category: editForm.category,
+      department: editForm.department,
+      quantity: qty,
+      availableQuantity: availQty,
+      status: finalStatus,
+      unit: editForm.unit,
+      description: editForm.description
+    }).catch(() => {});
     setIsEditModalOpen(false);
     setActiveResource(null);
     showToast(`Updated "${cleanName}" (${activeResource.resourceId}) specifications.`);
@@ -420,6 +482,7 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
 
     const updatedList = resources.filter(item => item.id !== activeResource.id);
     saveResources(updatedList);
+    api.deleteResource(activeResource.id).catch(() => {});
     setIsDeleteModalOpen(false);
     setActiveResource(null);
     showToast(`Resource "${deletedName}" (${deletedId}) removed from registry.`, 'info');

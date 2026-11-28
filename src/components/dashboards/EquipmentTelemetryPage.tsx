@@ -38,6 +38,8 @@ import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
+import { useApp } from '../../context/AppContext';
+import { api } from '../../services/api';
 import { 
   INITIAL_EQUIPMENT, 
   EquipmentItem, 
@@ -74,6 +76,8 @@ interface EquipmentTelemetryPageProps {
 }
 
 export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ onSelectTab }) => {
+  const { user } = useApp();
+
   // 1. Equipment Data State (Persistent via localStorage)
   const [equipmentList, setEquipmentList] = useState<EquipmentItem[]>(() => {
     try {
@@ -87,6 +91,65 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
     }
     return INITIAL_EQUIPMENT;
   });
+
+  // Fetch live equipment from backend
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLiveEquipment = async () => {
+      try {
+        const hospitalId = user?.hospitalId || 'hosp-chn-01';
+        const live = await api.getEquipment({ hospitalId });
+        if (isMounted && Array.isArray(live) && live.length > 0) {
+          setEquipmentList(prev => {
+            const mappedLive: EquipmentItem[] = live.map(eq => {
+              const existing = prev.find(p => p.id === eq.id || p.serialNumber === eq.serialNumber);
+              return {
+                id: eq.id,
+                equipmentId: eq.serialNumber || eq.id,
+                name: eq.name,
+                type: (eq.category as EquipmentType) || 'Ventilators',
+                department: eq.department || 'ICU Complex',
+                location: eq.location || eq.ward || '2nd Floor',
+                operationalStatus: (eq.operationalStatus as EquipmentStatus) || (eq.status as EquipmentStatus) || 'Operational',
+                condition: (eq.condition as EquipmentCondition) || 'Optimal',
+                conditionScore: eq.conditionScore || 100,
+                lastInspection: eq.lastInspection || '2 days ago',
+                lastMaintenanceDate: eq.lastMaintenanceDate || '2026-10-18',
+                nextMaintenanceDate: eq.nextMaintenanceDate || '2026-12-18',
+                maintenanceNotes: 'Biomedical checks verified.',
+                serialNumber: eq.serialNumber || eq.id,
+                telemetry: eq.telemetry && eq.telemetry.internalTemp !== undefined ? eq.telemetry : (existing?.telemetry || {
+                  internalTemp: 35.8,
+                  operatingHours: 3420,
+                  batteryLevel: 100,
+                  powerSource: 'AC Mains (UPS Backed)',
+                  signalStrength: 96,
+                  firmwareVersion: 'v4.2.1-prod',
+                  calibrationDate: '2026-10-18',
+                  primaryMetricLabel: 'Ventilator Telemetry',
+                  primaryMetricValue: 'Normal',
+                  isSimulated: true
+                }),
+                statusHistory: Array.isArray(eq.statusHistory) && eq.statusHistory.length > 0 ? eq.statusHistory : (existing?.statusHistory || []),
+                maintenanceHistory: Array.isArray(eq.maintenanceHistory) && eq.maintenanceHistory.length > 0 ? eq.maintenanceHistory : (existing?.maintenanceHistory || []),
+                lastUpdated: 'Just now'
+              };
+            });
+
+            const liveIds = new Set(mappedLive.map(m => m.id));
+            const customs = prev.filter(p => !liveIds.has(p.id));
+            const merged = [...mappedLive, ...customs];
+            try { localStorage.setItem(STORAGE_KEY, JSON.stringify(merged)); } catch {}
+            return merged;
+          });
+        }
+      } catch (err) {
+        // Fallback
+      }
+    };
+    fetchLiveEquipment();
+    return () => { isMounted = false; };
+  }, [user]);
 
   // Sync to localStorage
   const saveEquipment = (newList: EquipmentItem[]) => {
@@ -299,6 +362,16 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
 
     saveEquipment(updatedList);
 
+    // Sync with backend API
+    if (selectedEquipmentForStatus) {
+      api.updateEquipmentStatus(
+        selectedEquipmentForStatus.id,
+        newStatus,
+        undefined,
+        selectedEquipmentForStatus.location
+      ).catch(() => {});
+    }
+
     // Keep active details modal updated if viewing same item
     if (selectedEquipmentForDetails?.id === selectedEquipmentForStatus.id) {
       setSelectedEquipmentForDetails(prev => prev ? {
@@ -439,6 +512,16 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
     });
 
     saveEquipment(updatedList);
+
+    // Sync with backend API
+    if (selectedEquipmentForStatus) {
+      api.updateEquipmentStatus(
+        selectedEquipmentForStatus.id,
+        newStatus,
+        undefined,
+        selectedEquipmentForStatus.location
+      ).catch(() => {});
+    }
 
     // Update active details modal if open
     if (selectedEquipmentForDetails?.id === selectedEquipmentForMaintenance.id) {

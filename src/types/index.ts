@@ -242,6 +242,8 @@ export interface EmergencyIncident {
   priorityJustification?: string;
   reportedAt: string;
   updatedAt: string;
+  isSimulated?: boolean;
+  resolutionSummary?: string;
   timeline: EmergencyTimelineEvent[];
   matchedResources?: EmergencyMatchedResources;
 }
