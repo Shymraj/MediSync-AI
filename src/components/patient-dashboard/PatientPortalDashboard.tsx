@@ -524,7 +524,7 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
   const [registeredHospitals, setRegisteredHospitals] = useState<Hospital[]>([]);
 
   // Dedicated Original Patient Portal View State (when clicking View Hospital)
-  const [isViewingPortal, setIsViewingPortal] = useState(false);
+  const [isViewingPortal, setIsViewingPortal] = useState(true);
   const [portalTab, setPortalTab] = useState('dashboard');
   const [viewingHospital, setViewingHospital] = useState<CategorizedHospital | null>(null);
 
@@ -785,7 +785,9 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
 
             <PatientDashboard 
               activeTab={portalTab} 
+              selectedHospital={viewingHospital as any}
               onBack={() => setIsViewingPortal(false)}
+              onSelectTab={(tab) => setPortalTab(tab)}
             />
           </main>
         </div>

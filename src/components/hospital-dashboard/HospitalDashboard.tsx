@@ -32,6 +32,7 @@ import { HospitalDigitalTwinLab } from '../simulation/HospitalDigitalTwinLab';
 import { WorkflowAutomationCenter } from '../workflow/WorkflowAutomationCenter';
 import { InteroperabilityCenter } from '../interoperability/InteroperabilityCenter';
 import { HospitalOverviewView } from './HospitalOverviewView';
+import { HospitalPatientPortalView } from './HospitalPatientPortalView';
 import { UserRole } from '../../types';
 
 interface HospitalDashboardProps {
@@ -59,6 +60,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
     const queryTab = hashParams.get('tab');
     if (queryTab) return queryTab;
 
+    if (hash === '#/hospital/patient-portal' || hash === '#/hospital/patient') return 'patient_portal';
     if (hash === '#/hospital/beds') return 'beds';
     if (hash === '#/hospital/wards') return 'wards';
     if (hash === '#/hospital/departments') return 'departments';
@@ -89,6 +91,12 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
         } else if (hash.includes('nurse')) {
           setActiveRole('nurse');
         }
+        return;
+      }
+
+      if (hash === '#/hospital/patient-portal' || hash === '#/hospital/patient') {
+        setCurrentTab('patient_portal');
+        setActiveRole('overview');
         return;
       }
 
@@ -159,8 +167,28 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
   const [adminError, setAdminError] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
 
+  // Current hospital details
+  const currentHospital = {
+    id: user?.hospitalId || tempOnboarding.registrationNumber || 'hosp-chn-01',
+    districtId: (tempOnboarding.districtId || user?.districtId || 'chennai').toLowerCase(),
+    districtName: tempOnboarding.districtName || user?.districtName || 'Chennai',
+    name: tempOnboarding.hospitalName || user?.hospitalName || 'Rajiv Gandhi Government General Hospital (RGGGH)',
+    type: 'Government Medical College Hospital' as const,
+    location: tempOnboarding.hospitalAddress || 'EVR Periyar Salai, Park Town, Chennai',
+    availableDepartments: ['Cardiology', 'General Medicine', 'Pulmonology', 'Emergency & Casualty', 'Pediatrics', 'Orthopedics'],
+    status: 'Operational' as const,
+    totalBeds: 1750,
+    occupiedBeds: 1318,
+    readyBeds: 432,
+    prepBeds: 42,
+    icuAvailable: 180,
+    ventilatorsAvailable: 108,
+    phone: tempOnboarding.hospitalPhone || '+91 44 2530 5000',
+    emergencyContact: tempOnboarding.emergencyContact || '044-25305112'
+  };
+
   // Handle portal switching
-  const handleSelectPortal = (targetRole: 'overview' | 'doctor' | 'nurse' | 'admin') => {
+  const handleSelectPortal = (targetRole: 'overview' | 'doctor' | 'nurse' | 'admin' | 'patient' | string) => {
     if (targetRole === 'admin') {
       if (isAdminUnlocked) {
         setActiveRole('admin');
@@ -170,8 +198,16 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
         setAdminError(null);
         setShowAdminLoginModal(true);
       }
+    } else if (targetRole === 'patient') {
+      setActiveRole('overview');
+      setCurrentTab('patient_portal');
+      window.location.hash = '#/hospital/patient-portal';
     } else {
-      setActiveRole(targetRole);
+      if (targetRole === 'doctor' || targetRole === 'nurse' || targetRole === 'admin') {
+        setActiveRole(targetRole);
+      } else {
+        setActiveRole('overview');
+      }
       setCurrentTab('dashboard');
     }
   };
@@ -296,6 +332,16 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
       return <HospitalSettingsPage onSelectTab={setCurrentTab} />;
     }
 
+    // When Patient Portal (பொதுமக்கள் பார்வை) is selected in sidebar or header
+    if (currentTab === 'patient_portal') {
+      return (
+        <HospitalPatientPortalView
+          hospital={currentHospital}
+          onSelectTab={setCurrentTab}
+        />
+      );
+    }
+
     switch (activeRole as string) {
       case 'overview':
         return (
@@ -323,6 +369,10 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
   };
 
   const getRoleSubtitle = () => {
+    if (currentTab === 'patient_portal') {
+      return 'Hospital Patient Portal — Manage live citizen OPD intake, allocate duty doctors, and monitor public transparency.';
+    }
+
     if (activeRole === 'doctor') {
       const doctorSubtitles: Record<string, string> = {
         dashboard: 'Physician clinical workspace — emergency patient intake, bed readiness, and clinical requisitions.',
@@ -464,6 +514,8 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
             window.location.hash = '#/hospital/readiness-reports';
           } else if (tab === 'settings') {
             window.location.hash = '#/hospital/settings';
+          } else if (tab === 'patient_portal') {
+            window.location.hash = '#/hospital/patient-portal';
           } else if (tab === 'dashboard') {
             window.location.hash = '#/hospital/overview';
           }
@@ -553,7 +605,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
           activeRole={activeRole}
           onNavigateHome={() => { window.location.hash = '#/'; }}
           portalSwitcher={{
-            activeRole,
+            activeRole: currentTab === 'patient_portal' ? 'patient' : activeRole,
             onSelectPortal: handleSelectPortal,
             isAdminUnlocked
           }}
