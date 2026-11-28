@@ -16,7 +16,8 @@ import {
   ShieldCheck,
   CheckSquare,
   LogOut,
-  MapPin
+  MapPin,
+  Sparkles
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { UserRole } from '../../types';
@@ -67,6 +68,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
     { id: 'dashboard', label: 'My Care Portal', icon: <LayoutDashboard className="w-4 h-4" /> },
     { id: 'appointments', label: 'Appointments', icon: <Calendar className="w-4 h-4" /> },
     { id: 'queue', label: 'OPD Queue Status', icon: <Clock className="w-4 h-4" /> },
+    { id: 'ai_urgency', label: 'AI- Queue Priority', icon: <Sparkles className="w-4 h-4 text-orange-500" /> },
+    { id: 'beds', label: 'Bed Availability', icon: <Bed className="w-4 h-4" /> },
     { id: 'requests', label: 'My Service Requests', icon: <ClipboardList className="w-4 h-4" /> },
     { id: 'hospital', label: 'Hospital Information', icon: <Building2 className="w-4 h-4" /> },
     { id: 'profile', label: 'Patient Record', icon: <Users className="w-4 h-4" /> },
@@ -75,6 +78,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
 
   const hospitalNav = [
     { id: 'dashboard', label: 'Hospital Overview', icon: <LayoutDashboard className="w-4 h-4" /> },
+    { id: 'patient_portal', label: 'Patient Portal (பொதுமக்கள் பார்வை)', icon: <Users className="w-4 h-4" /> },
     { id: 'facility_info', label: 'Facility Profile', icon: <Building2 className="w-4 h-4" /> },
     { id: 'location_contact', label: 'Location & Helplines', icon: <MapPin className="w-4 h-4" /> },
     { id: 'bed_readiness', label: 'Bed Master Status', icon: <Bed className="w-4 h-4" /> },
