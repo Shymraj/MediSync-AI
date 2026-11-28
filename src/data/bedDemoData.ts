@@ -26,6 +26,9 @@ export interface BedItem {
   lastUpdated: string;
   statusHistory: BedHistoryItem[];
   notes?: string;
+  assignedDoctor?: string;
+  assignedNurse?: string;
+  history?: any[];
 }
 
 export const INITIAL_BEDS: BedItem[] = [

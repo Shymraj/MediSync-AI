@@ -71,6 +71,25 @@ export const BedManagementPage: React.FC<BedManagementPageProps> = ({ onSelectTa
       setSelectedWardFilter(initialWardFilter);
     }
   }, [initialWardFilter]);
+
+  // Sync with Hospital-Wide Data Service (Doctor, Emergency Requisition, Nurse Turnaround)
+  useEffect(() => {
+    const handleSync = () => {
+      try {
+        const saved = localStorage.getItem('medisync_bed_registry_data');
+        if (saved) {
+          setBeds(JSON.parse(saved));
+          setLastSyncedTime('Just now');
+        }
+      } catch {}
+    };
+    window.addEventListener('medisync_hospital_data_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('medisync_hospital_data_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, []);
   const [lastSyncedTime, setLastSyncedTime] = useState<string>('Just now');
   const [isRefreshing, setIsRefreshing] = useState(false);
 

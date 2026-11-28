@@ -19,6 +19,10 @@ export interface RequestTimelineEntry {
   action: 'Submitted' | 'Reviewed' | 'Approved' | 'Rejected' | 'Allocated' | 'Completed' | 'Cancelled';
   actor: string;
   notes: string;
+  date?: string;
+  status?: string;
+  user?: string;
+  note?: string;
 }
 
 export interface ResourceRequestItem {
@@ -42,6 +46,12 @@ export interface ResourceRequestItem {
   allocatedQuantity?: number;
   rejectionReason?: string;
   timeline: RequestTimelineEntry[];
+  patientId?: string;
+  patientName?: string;
+  allocatedResourceDetails?: string;
+  requesterId?: string;
+  requesterRole?: string;
+  clinicalJustification?: string;
 }
 
 export const INITIAL_REQUESTS: ResourceRequestItem[] = [

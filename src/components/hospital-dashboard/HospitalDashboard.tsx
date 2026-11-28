@@ -26,6 +26,11 @@ import { StaffVerificationPage } from '../dashboards/StaffVerificationPage';
 import { ResourceRequestsPage } from '../dashboards/ResourceRequestsPage';
 import { ReadinessReportsPage } from '../dashboards/ReadinessReportsPage';
 import { HospitalSettingsPage } from '../dashboards/HospitalSettingsPage';
+import { EmergencyCommandCenter } from '../emergency/EmergencyCommandCenter';
+import { PredictiveIntelligencePage } from '../forecasting/PredictiveIntelligencePage';
+import { HospitalDigitalTwinLab } from '../simulation/HospitalDigitalTwinLab';
+import { WorkflowAutomationCenter } from '../workflow/WorkflowAutomationCenter';
+import { InteroperabilityCenter } from '../interoperability/InteroperabilityCenter';
 import { HospitalOverviewView } from './HospitalOverviewView';
 import { UserRole } from '../../types';
 
@@ -40,10 +45,20 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
   } = useApp();
 
   // Active sub-portal within Hospital Dashboard: 'overview' (default) | 'doctor' | 'nurse' | 'admin'
-  const [activeRole, setActiveRole] = useState<'overview' | 'doctor' | 'nurse' | 'admin'>('overview');
+  const [activeRole, setActiveRole] = useState<'overview' | 'doctor' | 'nurse' | 'admin'>(() => {
+    const hash = typeof window !== 'undefined' ? window.location.hash : '';
+    if (hash.includes('doctor')) return 'doctor';
+    if (hash.includes('nurse')) return 'nurse';
+    if (hash.includes('admin') && !hash.includes('admin-login')) return 'admin';
+    return 'overview';
+  });
   const [currentTab, setCurrentTab] = useState<string>(() => {
     if (initialTab) return initialTab;
     const hash = window.location.hash;
+    const hashParams = new URLSearchParams(hash.split('?')[1] || '');
+    const queryTab = hashParams.get('tab');
+    if (queryTab) return queryTab;
+
     if (hash === '#/hospital/beds') return 'beds';
     if (hash === '#/hospital/wards') return 'wards';
     if (hash === '#/hospital/departments') return 'departments';
@@ -53,6 +68,11 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
     if (hash === '#/hospital/resource-requests' || hash === '#/hospital/requests') return 'requests';
     if (hash === '#/hospital/readiness-reports' || hash === '#/hospital/reports') return 'reports';
     if (hash === '#/hospital/settings') return 'settings';
+    if (hash === '#/hospital/command-center' || hash === '#/command-center' || hash === '#/emergency') return 'command_center';
+    if (hash === '#/hospital/simulation-lab' || hash === '#/hospital/digital-twin' || hash === '#/simulation-lab') return 'simulation_lab';
+    if (hash === '#/hospital/workflows' || hash === '#/hospital/workflow-automation' || hash === '#/workflows') return 'workflow_automation';
+    if (hash === '#/hospital/forecasting' || hash === '#/hospital/predictive-intelligence') return 'forecasting';
+    if (hash === '#/hospital/interoperability' || hash === '#/interoperability' || hash === '#/health-data-exchange') return 'interoperability';
     return 'dashboard';
   });
 
@@ -60,7 +80,35 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
   useEffect(() => {
     const syncWithHash = () => {
       const hash = window.location.hash;
-      if (hash === '#/hospital/beds') {
+      const hashParams = new URLSearchParams(hash.split('?')[1] || '');
+      const queryTab = hashParams.get('tab');
+      if (queryTab) {
+        setCurrentTab(queryTab);
+        if (hash.includes('doctor')) {
+          setActiveRole('doctor');
+        } else if (hash.includes('nurse')) {
+          setActiveRole('nurse');
+        }
+        return;
+      }
+
+      if (hash.includes('doctor')) {
+        setActiveRole('doctor');
+      } else if (hash.includes('nurse')) {
+        setActiveRole('nurse');
+      }
+
+      if (hash === '#/hospital/command-center' || hash === '#/command-center' || hash === '#/emergency') {
+        setCurrentTab('command_center');
+      } else if (hash === '#/hospital/simulation-lab' || hash === '#/hospital/digital-twin' || hash === '#/simulation-lab') {
+        setCurrentTab('simulation_lab');
+      } else if (hash === '#/hospital/workflows' || hash === '#/hospital/workflow-automation' || hash === '#/workflows') {
+        setCurrentTab('workflow_automation');
+      } else if (hash === '#/hospital/forecasting' || hash === '#/hospital/predictive-intelligence') {
+        setCurrentTab('forecasting');
+      } else if (hash === '#/hospital/interoperability' || hash === '#/interoperability' || hash === '#/health-data-exchange') {
+        setCurrentTab('interoperability');
+      } else if (hash === '#/hospital/beds') {
         setCurrentTab('beds');
       } else if (hash === '#/hospital/wards') {
         setCurrentTab('wards');
@@ -148,6 +196,41 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
   };
 
   const renderDashboardContent = () => {
+    // When in Doctor portal, delegate directly to DoctorDashboard
+    if (activeRole === 'doctor') {
+      return <DoctorDashboard activeTab={currentTab} onSelectTab={setCurrentTab} />;
+    }
+
+    // When in Nurse portal, delegate directly to NurseDashboard
+    if (activeRole === 'nurse') {
+      return <NurseDashboard activeTab={currentTab} />;
+    }
+
+    // When Emergency Command Center is selected in sidebar, render EmergencyCommandCenter
+    if (currentTab === 'command_center' || currentTab === 'command-center') {
+      return <EmergencyCommandCenter onSelectTab={setCurrentTab} />;
+    }
+
+    // When Hospital Digital Twin & Simulation Lab is selected in sidebar, render HospitalDigitalTwinLab
+    if (currentTab === 'simulation_lab' || currentTab === 'simulation-lab' || currentTab === 'digital-twin') {
+      return <HospitalDigitalTwinLab onSelectTab={setCurrentTab} />;
+    }
+
+    // When Intelligent Hospital Workflow Automation is selected in sidebar, render WorkflowAutomationCenter
+    if (currentTab === 'workflow_automation' || currentTab === 'workflows' || currentTab === 'workflow-automation') {
+      return <WorkflowAutomationCenter onNavigateTab={setCurrentTab} activeRole="admin" />;
+    }
+
+    // When Predictive Intelligence is selected in sidebar, render PredictiveIntelligencePage
+    if (currentTab === 'forecasting' || currentTab === 'predictive-intelligence') {
+      return <PredictiveIntelligencePage onSelectTab={setCurrentTab} />;
+    }
+
+    // When Hospital Interoperability & Health Data Exchange is selected in sidebar, render InteroperabilityCenter
+    if (currentTab === 'interoperability' || currentTab === 'health-data-exchange' || currentTab === 'data-exchange') {
+      return <InteroperabilityCenter onSelectTab={setCurrentTab} />;
+    }
+
     // When Bed Master Status is selected in sidebar, render BedManagementPage
     if (currentTab === 'beds') {
       return <BedManagementPage onSelectTab={setCurrentTab} />;
@@ -213,7 +296,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
       return <HospitalSettingsPage onSelectTab={setCurrentTab} />;
     }
 
-    switch (activeRole) {
+    switch (activeRole as string) {
       case 'overview':
         return (
           <HospitalOverviewView 
@@ -223,7 +306,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
           />
         );
       case 'doctor':
-        return <DoctorDashboard activeTab={currentTab} />;
+        return <DoctorDashboard activeTab={currentTab} onSelectTab={setCurrentTab} />;
       case 'nurse':
         return <NurseDashboard activeTab={currentTab} />;
       case 'admin':
@@ -240,6 +323,68 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
   };
 
   const getRoleSubtitle = () => {
+    if (activeRole === 'doctor') {
+      const doctorSubtitles: Record<string, string> = {
+        dashboard: 'Physician clinical workspace — emergency patient intake, bed readiness, and clinical requisitions.',
+        patients: 'Comprehensive electronic medical records, digital twin telemetry, and journey milestones.',
+        appointments: 'Outpatient clinics, scheduled patient reviews, and diagnostic consultations.',
+        admissions: 'Triage arrivals awaiting bed allocation, attending intake orders, and clinical clearance.',
+        wards: 'Inpatient wards capacity, nurse-to-patient staffing ratios, and clinical ward rounds.',
+        digital_twin: 'Holistic clinical profile, dynamic physiological telemetry stream, and laboratory indices.',
+        patient_monitoring: 'Continuous multi-patient bedside telemetry monitoring and vital trend surveillance.',
+        lab_intelligence: 'Central laboratory diagnostic feed, automated panic alerts, and critical value acknowledgments.',
+        digital_prescription: 'Electronic prescribing engine with integrated allergy and contraindication safety checks.',
+        care_plan: 'Multidisciplinary care pathway, clinical recovery milestones, and step-down targets.',
+        discharge_intelligence: 'Standardized 7-point readiness checklist preventing premature discharge and readmissions.',
+        ai_assistant: 'Clinical reasoning engine with differential diagnostic support, lab explanations, and draft progress notes.',
+        early_warning: 'Modified Early Warning System (MEWS) tracking acute physiological decompensation.',
+        deterioration_radar: 'Automated 4-tier risk stratification radar identifying high-acuity deterioration.',
+        smart_diagnosis: 'Evidence-based differential diagnosis matrix synthesizing signs, symptoms, and biomarkers.',
+        medication_safety: 'Continuous prescription cross-referencing against contraindications and drug interactions.',
+        ai_summarizer: 'Autonomous 9-point structured clinical case summary for handovers and EMR archiving.',
+        treatment_response: 'Admission baseline vs. current physiological comparison tracking therapeutic efficacy.',
+        decision_timeline: 'Clinical decision timeline tracking diagnostic milestones and interventions.',
+        command_center: 'Real-time emergency command telemetry, triage matching, and coordinated live resus response.',
+        simulation_lab: 'Hospital digital twin stress testing, emergency surge modeling, and resource buffer simulation.',
+        workflow_automation: 'Intelligent hospital workflows, event-driven task routing, and clinical authorization gates.',
+        forecasting: 'Operational capacity forecasts, projected bed occupancy, and critical shortage alerts.',
+        requests: 'Clinical resource requisitions for ICU beds, mechanical ventilation, and emergency bays.',
+        transfers: 'Inter-ward transfer coordination, step-down approvals, and bed booking.',
+        emergency_alerts: 'Code Blue, rapid response triggers, and hospital critical emergency broadcasts.',
+        emergency_matching: 'Live matching engine linking emergency triage patients with verified ready ICU beds and ventilators.',
+        doctor_nurse_coord: 'Closed-loop physician-nurse order communications, observations, and execution timestamps.',
+        referral_consult: 'Specialist opinion requests, inter-department referrals, and consultation notes.',
+        clinical_handover: 'Structured SBAR shift handover protocol ensuring seamless continuity of care.',
+        outbreak_detection: 'Spatial-temporal nosocomial cluster surveillance flagging hospital-acquired infections.',
+        knowledge_hub: 'Institutional clinical guidelines, antibiotic stewardship algorithms, and medical calculators.',
+        case_studies: 'Anonymized institutional clinical case archive and grand rounds library.',
+        doctor_analytics: 'Physician performance metrics, inpatient census trends, and response time benchmarks.',
+        audit_trail: 'HIPAA-compliant timestamped clinical action log and physician event audit.',
+        profile: 'Physician credentials, medical council registration, and institutional on-call roster.',
+        notifications: 'Real-time critical panic alerts, bed dock fulfillments, and shift updates.',
+        settings: 'Clinical alert notification thresholds, telemetry refresh parameters, and safety preferences.'
+      };
+      const norm = (currentTab || '').replace(/-/g, '_');
+      if (doctorSubtitles[norm]) return doctorSubtitles[norm];
+      if (doctorSubtitles[currentTab]) return doctorSubtitles[currentTab];
+      return 'Physician workspace — Emergency patient intake and clinical resource matching';
+    }
+
+    if (currentTab === 'command_center' || currentTab === 'command-center') {
+      return 'Centralized acute emergency command telemetry, triage matching, and coordinated live resus response.';
+    }
+    if (currentTab === 'simulation_lab' || currentTab === 'simulation-lab' || currentTab === 'digital-twin') {
+      return 'Digital twin operational modeling, hypothetical emergency stress tests, and resource reallocation simulation.';
+    }
+    if (currentTab === 'workflow_automation' || currentTab === 'workflows' || currentTab === 'workflow-automation') {
+      return 'Automated clinical workflows, event-driven task routing, and administrative authorization gates.';
+    }
+    if (currentTab === 'forecasting' || currentTab === 'predictive-intelligence') {
+      return 'Statistical demand forecasting, bed occupancy projections, and proactive resource shortage mitigation.';
+    }
+    if (currentTab === 'interoperability' || currentTab === 'health-data-exchange' || currentTab === 'data-exchange') {
+      return 'HL7 FHIR R4 and ABDM standardized healthcare data exchange, duplicate patient detection, and secure external network integration.';
+    }
     if (currentTab === 'beds') {
       return 'Monitor bed availability, occupancy, and operational readiness across hospital wards.';
     }
@@ -267,7 +412,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
     if (currentTab === 'settings') {
       return 'Institutional credentials, resource threshold parameters, alert rules, and administrative preferences.';
     }
-    switch (activeRole) {
+    switch (activeRole as string) {
       case 'overview':
         return 'Institutional facility command & operations overview';
       case 'doctor':
@@ -275,6 +420,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
       case 'nurse':
         return 'Ward operations — 6-stage bed turnover, sanitization, and equipment calibration';
       case 'admin':
+      default:
         return 'Hospital command center — Live bed control, staff authorization, and equipment allocation';
     }
   };
@@ -292,6 +438,14 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
         currentTab={currentTab}
         onSelectTab={(tab) => {
           setCurrentTab(tab);
+          if (activeRole === 'doctor') {
+            window.location.hash = `#/dashboard/doctor?tab=${tab}`;
+            return;
+          }
+          if (activeRole === 'nurse') {
+            window.location.hash = `#/dashboard/nurse?tab=${tab}`;
+            return;
+          }
           if (tab === 'beds') {
             window.location.hash = '#/hospital/beds';
           } else if (tab === 'wards') {
@@ -326,29 +480,74 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
       <div className="flex-1 flex flex-col min-w-0">
         <Header 
           title={
-            currentTab === 'beds'
-              ? 'Bed Management'
-              : currentTab === 'wards'
-              ? 'Clinical Wards'
-              : currentTab === 'departments'
-              ? 'Departments'
-              : currentTab === 'resources'
-              ? 'Resource Registry'
-              : currentTab === 'equipment'
-              ? 'Equipment Telemetry'
-              : currentTab === 'staff'
-              ? 'Staff Verification'
-              : currentTab === 'requests' || currentTab === 'resource-requests'
-              ? 'Resource Requests'
-              : currentTab === 'reports' || currentTab === 'readiness-reports'
-              ? 'Readiness Reports'
-              : currentTab === 'settings'
-              ? 'Hospital Settings'
-              : activeRole === 'overview'
-              ? 'HOSPITAL DASHBOARD'
-              : currentTab === 'dashboard' 
-              ? `${activeRole.toUpperCase()} OVERVIEW` 
-              : currentTab.toUpperCase()
+            activeRole === 'doctor'
+              ? (
+                currentTab === 'dashboard' || currentTab === 'overview' ? 'Doctor Overview' :
+                currentTab === 'patients' || currentTab === 'my_patients' ? 'My Patients' :
+                currentTab === 'appointments' ? 'Appointments' :
+                currentTab === 'wards' || currentTab === 'clinical_wards' ? 'Clinical Wards' :
+                currentTab === 'admissions' || currentTab === 'pending_admissions' ? 'Pending Admissions' :
+                currentTab === 'digital_twin' || currentTab === 'digital-twin' ? 'Patient Digital Twin' :
+                currentTab === 'patient_monitoring' || currentTab === 'patient-monitoring' ? 'Patient Monitoring' :
+                currentTab === 'lab_intelligence' || currentTab === 'lab-intelligence' ? 'Lab Intelligence' :
+                currentTab === 'digital_prescription' || currentTab === 'digital-prescription' ? 'Digital Prescription' :
+                currentTab === 'care_plan' || currentTab === 'care-plan' ? 'Care Plan' :
+                currentTab === 'discharge_intelligence' || currentTab === 'discharge-intelligence' ? 'Discharge Intelligence' :
+                currentTab === 'ai_assistant' || currentTab === 'ai-assistant' ? 'AI Clinical Assistant' :
+                currentTab === 'early_warning' || currentTab === 'early-warning' ? 'Early Warning System' :
+                currentTab === 'deterioration_radar' || currentTab === 'deterioration-radar' ? 'Patient Deterioration Radar' :
+                currentTab === 'smart_diagnosis' || currentTab === 'smart-diagnosis' ? 'Smart Diagnosis Support' :
+                currentTab === 'medication_safety' || currentTab === 'medication-safety' ? 'Medication Safety' :
+                currentTab === 'ai_summarizer' || currentTab === 'ai-summarizer' ? 'AI Case Summarizer' :
+                currentTab === 'treatment_response' || currentTab === 'treatment-response' ? 'Treatment Response Tracker' :
+                currentTab === 'decision_timeline' || currentTab === 'decision-timeline' ? 'Clinical Decision Timeline' :
+                currentTab === 'command_center' || currentTab === 'command-center' ? 'Emergency Command Center' :
+                currentTab === 'simulation_lab' || currentTab === 'simulation-lab' ? 'Emergency Simulation Lab' :
+                currentTab === 'workflow_automation' || currentTab === 'workflows' ? 'Clinical Workflows' :
+                currentTab === 'forecasting' || currentTab === 'predictive-intelligence' ? 'Capacity Forecasting & Alerts' :
+                currentTab === 'interoperability' || currentTab === 'health-data-exchange' ? 'Hospital Interoperability & Health Data Exchange' :
+                currentTab === 'requests' || currentTab === 'resource-requests' ? 'Resource Requests' :
+                currentTab === 'transfers' ? 'Inter-Ward Transfers' :
+                currentTab === 'emergency_alerts' ? 'Emergency Alerts' :
+                currentTab === 'emergency_matching' ? 'Emergency Patient Matching' :
+                currentTab === 'doctor_nurse_coord' ? 'Doctor–Nurse Coordination' :
+                currentTab === 'referral_consult' ? 'Referral & Specialist Consult' :
+                currentTab === 'clinical_handover' ? 'Smart Clinical Handover' :
+                currentTab === 'outbreak_detection' ? 'Outbreak Pattern Detection' :
+                currentTab === 'knowledge_hub' ? 'Clinical Knowledge Hub' :
+                currentTab === 'case_studies' ? 'Case Study Library' :
+                currentTab === 'doctor_analytics' ? 'Doctor Analytics' :
+                currentTab === 'audit_trail' ? 'Clinical Audit Trail' :
+                currentTab === 'profile' ? 'Doctor Profile' :
+                currentTab === 'notifications' ? 'Notifications' :
+                currentTab === 'settings' ? 'Settings' :
+                currentTab.toUpperCase()
+              )
+              : (
+                currentTab === 'beds'
+                  ? 'Bed Management'
+                  : currentTab === 'wards'
+                  ? 'Clinical Wards'
+                  : currentTab === 'departments'
+                  ? 'Departments'
+                  : currentTab === 'resources'
+                  ? 'Resource Registry'
+                  : currentTab === 'equipment'
+                  ? 'Equipment Telemetry'
+                  : currentTab === 'staff'
+                  ? 'Staff Verification'
+                  : currentTab === 'requests' || currentTab === 'resource-requests'
+                  ? 'Resource Requests'
+                  : currentTab === 'reports' || currentTab === 'readiness-reports'
+                  ? 'Readiness Reports'
+                  : currentTab === 'settings'
+                  ? 'Hospital Settings'
+                  : activeRole === 'overview'
+                  ? 'HOSPITAL DASHBOARD'
+                  : currentTab === 'dashboard' 
+                  ? `${activeRole.toUpperCase()} OVERVIEW` 
+                  : currentTab.toUpperCase()
+              )
           } 
           subtitle={getRoleSubtitle()} 
           activeRole={activeRole}

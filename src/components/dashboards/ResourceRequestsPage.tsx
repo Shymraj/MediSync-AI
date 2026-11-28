@@ -119,10 +119,30 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
     setRequests(newRequests);
     try {
       localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(newRequests));
+      window.dispatchEvent(new CustomEvent('medisync_hospital_data_updated', { detail: { type: 'requests_updated' } }));
     } catch (e) {
       console.error('Failed to save requests:', e);
     }
   };
+
+  // Sync with Hospital-Wide Data Service (Doctor Requisitions & Emergency Intake)
+  useEffect(() => {
+    const handleSync = () => {
+      try {
+        const saved = localStorage.getItem(REQUESTS_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) setRequests(parsed);
+        }
+      } catch {}
+    };
+    window.addEventListener('medisync_hospital_data_updated', handleSync);
+    window.addEventListener('storage', handleSync);
+    return () => {
+      window.removeEventListener('medisync_hospital_data_updated', handleSync);
+      window.removeEventListener('storage', handleSync);
+    };
+  }, []);
 
   // Save registry resources helper
   const saveRegistryResources = (newResources: ResourceItem[]) => {

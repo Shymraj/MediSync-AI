@@ -31,6 +31,11 @@ import { StaffVerificationPage } from './StaffVerificationPage';
 import { ResourceRequestsPage } from './ResourceRequestsPage';
 import { ReadinessReportsPage } from './ReadinessReportsPage';
 import { HospitalSettingsPage } from './HospitalSettingsPage';
+import { EmergencyCommandCenter } from '../emergency/EmergencyCommandCenter';
+import { PredictiveIntelligencePage } from '../forecasting/PredictiveIntelligencePage';
+import { HospitalDigitalTwinLab } from '../simulation/HospitalDigitalTwinLab';
+import { WorkflowAutomationCenter } from '../workflow/WorkflowAutomationCenter';
+import { InteroperabilityCenter } from '../interoperability/InteroperabilityCenter';
 
 interface AdminDashboardProps {
   activeTab: string;
@@ -116,6 +121,31 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ activeTab, onSel
         return <Shield className="w-6 h-6 text-[#2563A6]" />;
     }
   };
+
+  // Emergency Command Center
+  if (activeTab === 'command_center' || activeTab === 'command-center') {
+    return <EmergencyCommandCenter onSelectTab={onSelectTab} />;
+  }
+
+  // Hospital Digital Twin & Emergency Simulation Lab
+  if (activeTab === 'simulation_lab' || activeTab === 'simulation-lab' || activeTab === 'digital-twin') {
+    return <HospitalDigitalTwinLab onSelectTab={onSelectTab} activeRole="admin" />;
+  }
+
+  // Hospital Interoperability & Health Data Exchange
+  if (activeTab === 'interoperability' || activeTab === 'health-data-exchange' || activeTab === 'data-exchange') {
+    return <InteroperabilityCenter onSelectTab={onSelectTab} activeRole="admin" />;
+  }
+
+  // Intelligent Hospital Workflow Automation
+  if (activeTab === 'workflow_automation' || activeTab === 'workflows' || activeTab === 'workflow-automation') {
+    return <WorkflowAutomationCenter onNavigateTab={onSelectTab} activeRole="admin" />;
+  }
+
+  // Predictive Hospital Intelligence & Forecasting
+  if (activeTab === 'forecasting' || activeTab === 'predictive-intelligence') {
+    return <PredictiveIntelligencePage onSelectTab={onSelectTab} />;
+  }
 
   // Step 2: Bed Management (Bed Master Status)
   if (activeTab === 'beds') {

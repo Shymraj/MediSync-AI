@@ -72,6 +72,8 @@ export interface EquipmentItem {
   telemetry: TelemetryReading;
   statusHistory: StatusHistoryEntry[];
   maintenanceHistory: MaintenanceRecord[];
+  lastInspection?: string;
+  serialNumber?: string;
 }
 
 export const INITIAL_EQUIPMENT: EquipmentItem[] = [
