@@ -27,6 +27,10 @@
   .font-serif-headline {
     font-family: 'Playfair Display', Georgia, Cambria, serif;
   }
+
+  .font-hero-headline {
+    font-family: 'DM Serif Display', Georgia, serif;
+  }
 }
 
 /* Custom scrollbars for clean enterprise look */

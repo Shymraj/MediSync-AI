@@ -225,7 +225,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onGetStarted, onSelect
               <span>Smarter Hospitals &bull; Stronger Healthcare</span>
             </div>
 
-            <h1 className="text-3xl sm:text-4xl lg:text-[3.15rem] font-serif-headline text-[#0F172A] leading-[1.10] tracking-tight">
+            <h1 className="text-3xl sm:text-4xl lg:text-[3.15rem] font-hero-headline text-[#0F172A] leading-[1.10] tracking-tight">
               Every Hospital.<br />
               Every Resource.<br />
               Every Minute. <span className="text-[#1A56DB] italic font-normal">In Sync.</span>
