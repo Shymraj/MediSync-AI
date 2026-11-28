@@ -20,6 +20,11 @@ import {
   hospitalDataService, 
   DATA_UPDATED_EVENT 
 } from '../services/hospitalDataService';
+import {
+  setActiveHospitalScopeId,
+  getActiveHospitalScopeId,
+  hospitalScopedKey
+} from '../utils/hospitalSync';
 import { 
   PatientDigitalTwin, 
   DoctorNurseTaskItem, 
@@ -66,6 +71,7 @@ interface AppContextType {
   generateClinicalAlert: (alertData: Parameters<typeof hospitalDataService.generateClinicalAlert>[0]) => EarlyWarningAlertItem;
   unreadNotificationsCount: number;
   loginWithGoogle: (email?: string, name?: string, portal?: 'hospital' | 'patient') => Promise<UserProfile>;
+  loginRegisteredHospital: (record: any) => Promise<void>;
   logout: () => void;
   setUser: React.Dispatch<React.SetStateAction<UserProfile | null>>;
   // Resource lifecycle interactions
@@ -168,7 +174,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [doctorNurseTasks, setDoctorNurseTasks] = useState<DoctorNurseTaskItem[]>(() => hospitalDataService.getDoctorNurseTasks());
   const [clinicalAlerts, setClinicalAlerts] = useState<EarlyWarningAlertItem[]>(() => hospitalDataService.getClinicalAlerts());
 
-  const selectedHospitalId = user?.hospitalId || tempOnboarding.hospitalId || 'hosp-chn-01';
+  const selectedHospitalId = user?.hospitalId || tempOnboarding.hospitalId || 'Hos_Id-101';
+
+  useEffect(() => {
+    if (user?.role !== 'patient' && selectedHospitalId) {
+      setActiveHospitalScopeId(selectedHospitalId);
+      hospitalDataService.setHospitalContext(selectedHospitalId);
+    }
+  }, [selectedHospitalId, user?.role]);
   const socketRef = useRef<any>(null);
 
   // Real-Time Communication States
@@ -223,9 +236,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setDoctorNurseTasks(hospitalDataService.getDoctorNurseTasks());
       setClinicalAlerts(hospitalDataService.getClinicalAlerts());
 
+      const activeScopeId = getActiveHospitalScopeId();
       const eqList = hospitalDataService.getEquipment().map(eq => ({
         id: eq.id,
-        hospitalId: 'hosp-chn-01',
+        hospitalId: activeScopeId,
         name: eq.name,
         category: eq.type === 'Ventilators' ? ('Ventilator' as const) : eq.type === 'Infusion Pumps' ? ('Infusion Pump' as const) : ('Cardiac Monitor' as const),
         ward: eq.department,
@@ -237,7 +251,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const reqs = hospitalDataService.getResourceRequests().map(r => ({
         id: r.id,
-        hospitalId: 'hosp-chn-01',
+        hospitalId: activeScopeId,
         requesterId: r.requesterId || r.requestId,
         requesterName: r.requestedBy,
         requesterRole: ((r.requesterRole || 'doctor').toLowerCase() as UserRole) || 'doctor',
@@ -256,7 +270,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const notifs: NotificationItem[] = hospitalDataService.getNotifications().map(n => ({
         id: n.id,
-        hospitalId: 'hosp-chn-01',
+        hospitalId: activeScopeId,
         title: n.title,
         message: n.message,
         type: n.type,
@@ -647,6 +661,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const updateTempHospital = (hospitalId: string, hospitalName: string) => {
+    if (hospitalId) {
+      setActiveHospitalScopeId(hospitalId);
+      hospitalDataService.setHospitalContext(hospitalId);
+    }
     setTempOnboarding(prev => ({ ...prev, hospitalId, hospitalName }));
   };
 
@@ -688,7 +706,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       email,
       avatarUrl: `https://api.dicebear.com/7.x/initials/svg?seed=${encodeURIComponent(name)}&backgroundColor=2563a6&textColor=ffffff`,
       role: isPatient ? 'patient' : undefined,
-      hospitalId: isPatient ? 'hosp-chn-01' : undefined,
+      hospitalId: undefined,
       hospitalName: isPatient ? 'Rajiv Gandhi Government General Hospital (RGGGH)' : undefined,
       districtId: isPatient ? 'chennai' : undefined,
       districtName: isPatient ? 'Chennai' : undefined,
@@ -697,6 +715,66 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
     setUser(fallbackUser);
     return fallbackUser;
+  };
+
+  // Login an already-registered hospital by its Hos_Id-XXX / record
+  const loginRegisteredHospital = async (record: any): Promise<void> => {
+    const hId = record.hospitalId || record.id || 'Hos_Id-101';
+    setActiveHospitalScopeId(hId);
+    hospitalDataService.setHospitalContext(hId);
+    const hName = record.hospitalName || record.name || 'Registered Hospital';
+    const hEmail = record.hospitalEmail || 'admin@hospital.medisync.in';
+
+    const loggedUser = await loginWithGoogle(hEmail, hName, 'hospital');
+
+    const updatedUser: UserProfile = {
+      ...loggedUser,
+      name: hName,
+      email: hEmail,
+      hospitalId: hId,
+      hospitalName: hName,
+      districtId: record.districtId || 'chennai',
+      districtName: record.districtName || 'Chennai',
+      role: 'admin',
+      roleVerificationStatus: 'approved',
+      isOnboarded: true
+    };
+    setUser(updatedUser);
+
+    setTempOnboarding({
+      name: hName,
+      username: hEmail.split('@')[0] || 'hospital_admin',
+      districtId: record.districtId || 'chennai',
+      districtName: record.districtName || 'Chennai',
+      hospitalId: hId,
+      hospitalName: hName,
+      role: 'admin',
+      hospitalType: record.hospitalType || 'General Hospital',
+      registrationNumber: record.registrationNumber || hId,
+      ownership: record.ownership || 'Government',
+      category: record.category || 'General',
+      yearEstablished: record.yearEstablished || '2026',
+      hospitalDescription: record.description || '',
+      website: record.website || '',
+      hospitalAddress: record.hospitalAddress || '',
+      areaLocality: record.areaLocality || '',
+      pincode: record.pincode || '',
+      hospitalPhone: record.hospitalPhone || '',
+      hospitalEmail: hEmail,
+      emergencyContact: record.emergencyContact || '044-25305112'
+    });
+
+    try {
+      localStorage.setItem(hospitalScopedKey('medisync_hospital_info', hId), JSON.stringify({
+        hospitalName: hName,
+        hospitalId: hId,
+        hospitalType: record.hospitalType || 'General Hospital',
+        address: record.hospitalAddress ? `${record.hospitalAddress}, ${record.areaLocality || ''} ${record.districtName || ''}`.trim() : 'Tamil Nadu',
+        contactNumber: record.emergencyContact || record.hospitalPhone || '044-25305112',
+        officialEmail: hEmail,
+        hospitalAdministrator: `${hName} Administration`
+      }));
+    } catch {}
   };
 
   const logout = () => {
@@ -929,6 +1007,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         generateClinicalAlert,
         unreadNotificationsCount,
         loginWithGoogle,
+        loginRegisteredHospital,
         logout,
         setUser,
         updateBedStatus,

@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { api } from '../../services/api';
+import { hospitalScopedKey, getActiveHospitalScopeId } from '../../utils/hospitalSync';
 import { 
   EmergencyIncident, 
   EmergencySeverity, 
@@ -74,7 +75,7 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
   // Incidents state
   const [incidents, setIncidents] = useState<EmergencyIncident[]>(() => {
     try {
-      const saved = localStorage.getItem('medisync_emergency_incidents_cache');
+      const saved = localStorage.getItem(hospitalScopedKey('medisync_emergency_incidents_cache'));
       if (saved) return JSON.parse(saved);
     } catch {}
     return INITIAL_EMERGENCY_INCIDENTS;
@@ -131,17 +132,17 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
   // Fetch from backend API
   const fetchIncidentsAndAnalytics = async () => {
     try {
-      const data = await api.getEmergencyIncidents('hosp-chn-01');
+      const data = await api.getEmergencyIncidents(getActiveHospitalScopeId());
       if (Array.isArray(data) && data.length > 0) {
         setIncidents(data);
-        localStorage.setItem('medisync_emergency_incidents_cache', JSON.stringify(data));
+        localStorage.setItem(hospitalScopedKey('medisync_emergency_incidents_cache'), JSON.stringify(data));
       }
     } catch (err) {
       // Offline fallback: keep cached/initial
     }
 
     try {
-      const analyticsData = await api.getEmergencyAnalytics('hosp-chn-01');
+      const analyticsData = await api.getEmergencyAnalytics(getActiveHospitalScopeId());
       if (analyticsData && analyticsData.activeCount !== undefined) {
         setAnalytics(analyticsData);
       }
@@ -159,7 +160,7 @@ export const EmergencyCommandCenter: React.FC<EmergencyCommandCenterProps> = ({
   // Save incidents to localStorage when changed
   useEffect(() => {
     try {
-      localStorage.setItem('medisync_emergency_incidents_cache', JSON.stringify(incidents));
+      localStorage.setItem(hospitalScopedKey('medisync_emergency_incidents_cache'), JSON.stringify(incidents));
     } catch {}
   }, [incidents]);
 

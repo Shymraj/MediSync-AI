@@ -17,6 +17,7 @@ import { Button } from '../common/Button';
 import { useApp } from '../../context/AppContext';
 import { OnboardingProgressBar } from './OnboardingProgressBar';
 import { RegistrationSuccessScreen } from './RegistrationSuccessScreen';
+import { setActiveHospitalScopeId, hospitalScopedKey } from '../../utils/hospitalSync';
 
 interface HospitalLocationContactPageProps {
   onComplete: () => void;
@@ -27,7 +28,7 @@ export const HospitalLocationContactPage: React.FC<HospitalLocationContactPagePr
   onComplete, 
   onBack 
 }) => {
-  const { tempOnboarding, updateHospitalLocationContact } = useApp();
+  const { tempOnboarding, updateHospitalLocationContact, updateTempHospital } = useApp();
 
   const districtName = tempOnboarding.districtName || 'Tamil Nadu';
   const hospitalName = tempOnboarding.hospitalName || 'Institutional Hospital';
@@ -56,6 +57,7 @@ export const HospitalLocationContactPage: React.FC<HospitalLocationContactPagePr
 
   const [error, setError] = useState<string | null>(null);
   const [showSuccessScreen, setShowSuccessScreen] = useState(false);
+  const [createdHospitalId, setCreatedHospitalId] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,9 +107,39 @@ export const HospitalLocationContactPage: React.FC<HospitalLocationContactPagePr
       emergencyContact: emergencyContact.trim()
     });
 
+    // Generate unique Hospital ID in exact format: Hos_Id-XXX (e.g. Hos_Id-345)
+    let generatedHospitalId = `Hos_Id-${Math.floor(100 + Math.random() * 900)}`;
+    try {
+      const existingStr = localStorage.getItem('medisync_registered_hospitals_cache');
+      const existingArr = existingStr ? JSON.parse(existingStr) : [];
+      const existingIds = new Set(existingArr.map((h: any) => h.hospitalId).filter(Boolean));
+      while (existingIds.has(generatedHospitalId)) {
+        generatedHospitalId = `Hos_Id-${Math.floor(100 + Math.random() * 900)}`;
+      }
+    } catch {}
+
+    updateTempHospital(generatedHospitalId, tempOnboarding.hospitalName || 'Institutional Hospital');
+
+    // Persist active Hospital ID & profile strictly under this hospital's own isolated storage
+    setActiveHospitalScopeId(generatedHospitalId);
+    try {
+      const settingsHospitalInfo = {
+        hospitalName: tempOnboarding.hospitalName || 'Institutional Hospital',
+        hospitalId: generatedHospitalId,
+        hospitalType: tempOnboarding.hospitalType || 'General Hospital',
+        address: `${hospitalAddress.trim()}, ${areaLocality.trim()}, ${tempOnboarding.districtName || districtName} - ${cleanPincode}`,
+        contactNumber: emergencyContact.trim(),
+        officialEmail: hospitalEmail.trim().toLowerCase(),
+        hospitalAdministrator: tempOnboarding.name ? `${tempOnboarding.name} (Hospital Administrator)` : 'Hospital Chief Administrator'
+      };
+      localStorage.setItem(hospitalScopedKey('medisync_hospital_info', generatedHospitalId), JSON.stringify(settingsHospitalInfo));
+      sessionStorage.setItem('medisync_generated_hospital_id', generatedHospitalId);
+    } catch {}
+
     // Assemble complete hospital record for MediSync Platform Super Admin Registry
     const newHospitalRecord = {
-      id: 'reg-' + Date.now(),
+      id: generatedHospitalId,
+      hospitalId: generatedHospitalId,
       hospitalName: tempOnboarding.hospitalName || 'Institutional Hospital',
       hospitalType: tempOnboarding.hospitalType || 'General Hospital',
       registrationNumber: tempOnboarding.registrationNumber || ('TN-MED-REG-2026-' + Math.floor(1000 + Math.random() * 9000)),
@@ -138,6 +170,7 @@ export const HospitalLocationContactPage: React.FC<HospitalLocationContactPagePr
       const existing = existingStr ? JSON.parse(existingStr) : [];
       const updated = [newHospitalRecord, ...existing.filter((h: any) => h.registrationNumber !== newHospitalRecord.registrationNumber)];
       localStorage.setItem(LOCAL_KEY, JSON.stringify(updated));
+      window.dispatchEvent(new CustomEvent('medisync_hospitals_updated'));
     } catch {}
 
     // 2. Persist to backend database via REST API
@@ -149,12 +182,13 @@ export const HospitalLocationContactPage: React.FC<HospitalLocationContactPagePr
       }).catch(() => {});
     } catch {}
 
-    // Store celebration flag and immediately navigate straight to Hospital Dashboard!
+    // Store celebration flag and show GPay-style MediSync Success Tick with Hospital ID!
     try {
       sessionStorage.setItem('medisync_just_registered', 'true');
     } catch {}
 
-    onComplete();
+    setCreatedHospitalId(generatedHospitalId);
+    setShowSuccessScreen(true);
   };
 
   return (
@@ -403,6 +437,7 @@ export const HospitalLocationContactPage: React.FC<HospitalLocationContactPagePr
       {/* GPay-style Success Tick Modal Screen */}
       {showSuccessScreen && (
         <RegistrationSuccessScreen
+          hospitalId={createdHospitalId}
           hospitalName={hospitalName}
           districtName={districtName}
           registrationNumber={tempOnboarding.registrationNumber || 'TN-MED-REG-2026-8941'}

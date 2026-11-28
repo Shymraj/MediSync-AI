@@ -163,6 +163,10 @@ export const AppContent: React.FC = () => {
           // Hospital Registration: Always go to Google verification first, then the 5 onboarding flows!
           navigateTo('/auth/hospital');
         }}
+        onHospitalLoginSuccess={() => {
+          setSelectedPortal('hospital');
+          navigateTo('/hospital-dashboard');
+        }}
         onSelectPatient={() => {
           setSelectedPortal('patient');
           if (user?.role === 'patient') {
@@ -226,7 +230,7 @@ export const AppContent: React.FC = () => {
   }
 
   // Guard: Patients do NOT need staff onboarding sequence -> redirect directly to Patient Dashboard
-  if (user && (user as any).role === 'patient' && ['/profile', '/district', '/hospital', '/role', '/verification'].includes(currentPath)) {
+  if (user && (user as any).role === 'patient' && ['/profile', '/district', '/hospital', '/role', '/verification', '/hospital/beds', '/hospital/wards', '/hospital/departments'].includes(currentPath)) {
     navigateTo('/dashboard/patient');
     return null;
   }
@@ -266,6 +270,8 @@ export const AppContent: React.FC = () => {
   // Hospital Dashboard Routes (Directly entered after Register Hospital or via Bed Management / Wards navigation)
   if (
     currentPath === '/hospital-dashboard' || 
+    currentPath === '/hospital/patient-portal' || 
+    currentPath === '/hospital/patient' || 
     currentPath === '/hospital/beds' || 
     currentPath === '/hospital/wards' || 
     currentPath === '/hospital/departments' || 
@@ -297,7 +303,9 @@ export const AppContent: React.FC = () => {
     currentPath === '/health-data-exchange' ||
     currentPath === '/hospital/overview'
   ) {
-    const initialTab = currentPath === '/hospital/beds' 
+    const initialTab = (currentPath === '/hospital/patient-portal' || currentPath === '/hospital/patient')
+      ? 'patient_portal'
+      : currentPath === '/hospital/beds' 
       ? 'beds' 
       : currentPath === '/hospital/wards' 
       ? 'wards' 
@@ -508,7 +516,7 @@ export const AppContent: React.FC = () => {
         case 'nurse':
           return <NurseDashboard activeTab={effectiveTab} />;
         case 'patient':
-          return <PatientDashboard activeTab={effectiveTab} />;
+          return <PatientDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
         default:
           return <AdminDashboard activeTab={effectiveTab} onSelectTab={setCurrentTab} />;
       }
@@ -684,7 +692,7 @@ export const AppContent: React.FC = () => {
     };
 
     return (
-      <div className="min-h-screen bg-[#F5F7FA] flex text-[#1E293B]">
+      <div className={`flex text-[#1E293B] ${activeRole === 'patient' ? 'h-screen overflow-hidden bg-[#FFF8F3]' : 'min-h-screen bg-[#F5F7FA]'}`}>
         {/* Fixed Left Sidebar */}
         <Sidebar 
           currentTab={effectiveTab} 
@@ -696,6 +704,15 @@ export const AppContent: React.FC = () => {
             }
             if (activeRole === 'nurse') {
               window.location.hash = `#/dashboard/nurse?tab=${tab}`;
+              return;
+            }
+            if (activeRole === 'patient') {
+              setCurrentTab(tab);
+              if (tab === 'find_hospitals' || tab === 'hospital_search') {
+                navigateTo('/patient-dashboard');
+              } else {
+                navigateTo('/dashboard/patient');
+              }
               return;
             }
             if (tab === 'beds') {
@@ -724,7 +741,7 @@ export const AppContent: React.FC = () => {
         />
 
         {/* Main Layout */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className={`flex-1 flex flex-col min-w-0 ${activeRole === 'patient' ? 'h-screen overflow-hidden' : ''}`}>
           <Header 
             title={getHeaderTitle()} 
             subtitle={getDashboardSubtitle()} 

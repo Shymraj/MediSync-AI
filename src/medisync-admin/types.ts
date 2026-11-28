@@ -1,5 +1,6 @@
 export interface RegisteredHospitalRecord {
   id: string;
+  hospitalId?: string;
   hospitalName: string;
   hospitalType: string;
   registrationNumber: string;

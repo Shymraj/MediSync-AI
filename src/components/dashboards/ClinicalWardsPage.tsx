@@ -33,6 +33,7 @@ import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
 import { INITIAL_WARDS, WardItem } from '../../data/wardDemoData';
 import { INITIAL_BEDS, BedItem, BedStatusType } from '../../data/bedDemoData';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 import { HOSPITAL_DEMO_DATA } from '../../data/hospitalDemoData';
 
 interface ClinicalWardsPageProps {
@@ -43,7 +44,7 @@ export const ClinicalWardsPage: React.FC<ClinicalWardsPageProps> = ({ onSelectTa
   // Shared Bed Data Source (Requirement 6)
   const [beds, setBeds] = useState<BedItem[]>(() => {
     try {
-      const saved = localStorage.getItem('medisync_bed_registry_data');
+      const saved = localStorage.getItem(hospitalScopedKey('medisync_bed_registry_data'));
       if (saved) return JSON.parse(saved);
     } catch {}
     return INITIAL_BEDS;
@@ -52,7 +53,7 @@ export const ClinicalWardsPage: React.FC<ClinicalWardsPageProps> = ({ onSelectTa
   // Wards Registry State
   const [wards, setWards] = useState<WardItem[]>(() => {
     try {
-      const saved = localStorage.getItem('medisync_wards_registry_data');
+      const saved = localStorage.getItem(hospitalScopedKey('medisync_wards_registry_data'));
       if (saved) return JSON.parse(saved);
     } catch {}
     return INITIAL_WARDS;
@@ -91,7 +92,7 @@ export const ClinicalWardsPage: React.FC<ClinicalWardsPageProps> = ({ onSelectTa
   // Refresh beds from shared localStorage whenever refreshed or mounted
   const reloadBedData = () => {
     try {
-      const saved = localStorage.getItem('medisync_bed_registry_data');
+      const saved = localStorage.getItem(hospitalScopedKey('medisync_bed_registry_data'));
       if (saved) setBeds(JSON.parse(saved));
     } catch {}
   };
@@ -263,8 +264,8 @@ export const ClinicalWardsPage: React.FC<ClinicalWardsPageProps> = ({ onSelectTa
     setBeds(updatedBeds);
 
     try {
-      localStorage.setItem('medisync_wards_registry_data', JSON.stringify(updatedWards));
-      localStorage.setItem('medisync_bed_registry_data', JSON.stringify(updatedBeds));
+      localStorage.setItem(hospitalScopedKey('medisync_wards_registry_data'), JSON.stringify(updatedWards));
+      localStorage.setItem(hospitalScopedKey('medisync_bed_registry_data'), JSON.stringify(updatedBeds));
     } catch {}
 
     setIsAddWardModalOpen(false);

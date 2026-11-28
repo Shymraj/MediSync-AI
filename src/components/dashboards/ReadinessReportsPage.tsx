@@ -34,6 +34,7 @@ import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { INITIAL_BEDS, BedItem } from '../../data/bedDemoData';
 import { INITIAL_WARDS, WardItem } from '../../data/wardDemoData';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 import { INITIAL_EQUIPMENT, EquipmentItem } from '../../data/equipmentDemoData';
 import { INITIAL_RESOURCES, ResourceItem } from '../../data/resourceDemoData';
 import { INITIAL_STAFF, StaffMember } from '../../data/staffDemoData';
@@ -82,7 +83,7 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
   // 1. Shared Data State loaded from localStorage or INITIAL_* fallbacks
   const [beds, setBeds] = useState<BedItem[]>(() => {
     try {
-      const s = localStorage.getItem(BEDS_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(BEDS_STORAGE_KEY));
       if (s) {
         const p = JSON.parse(s);
         if (Array.isArray(p) && p.length > 0) return p;
@@ -95,7 +96,7 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
 
   const [wards, setWards] = useState<WardItem[]>(() => {
     try {
-      const s = localStorage.getItem(WARDS_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(WARDS_STORAGE_KEY));
       if (s) {
         const p = JSON.parse(s);
         if (Array.isArray(p) && p.length > 0) return p;
@@ -108,7 +109,7 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
 
   const [equipment, setEquipment] = useState<EquipmentItem[]>(() => {
     try {
-      const s = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY));
       if (s) {
         const p = JSON.parse(s);
         if (Array.isArray(p) && p.length > 0) return p;
@@ -121,7 +122,7 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
 
   const [resources, setResources] = useState<ResourceItem[]>(() => {
     try {
-      const s = localStorage.getItem(RESOURCES_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(RESOURCES_STORAGE_KEY));
       if (s) {
         const p = JSON.parse(s);
         if (Array.isArray(p) && p.length > 0) return p;
@@ -134,7 +135,7 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
 
   const [staff, setStaff] = useState<StaffMember[]>(() => {
     try {
-      const s = localStorage.getItem(STAFF_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(STAFF_STORAGE_KEY));
       if (s) {
         const p = JSON.parse(s);
         if (Array.isArray(p) && p.length > 0) return p;
@@ -147,7 +148,7 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
 
   const [requests, setRequests] = useState<ResourceRequestItem[]>(() => {
     try {
-      const s = localStorage.getItem(REQUESTS_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(REQUESTS_STORAGE_KEY));
       if (s) {
         const p = JSON.parse(s);
         if (Array.isArray(p) && p.length > 0) return p;
@@ -160,7 +161,7 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
 
   const [departments, setDepartments] = useState<DepartmentItem[]>(() => {
     try {
-      const s = localStorage.getItem(DEPARTMENTS_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(DEPARTMENTS_STORAGE_KEY));
       if (s) {
         const p = JSON.parse(s);
         if (Array.isArray(p) && p.length > 0) return p;
@@ -195,25 +196,25 @@ export const ReadinessReportsPage: React.FC<ReadinessReportsPageProps> = ({ onSe
     setIsRefreshing(true);
     setTimeout(() => {
       try {
-        const sBeds = localStorage.getItem(BEDS_STORAGE_KEY);
+        const sBeds = localStorage.getItem(hospitalScopedKey(BEDS_STORAGE_KEY));
         if (sBeds) setBeds(JSON.parse(sBeds));
 
-        const sWards = localStorage.getItem(WARDS_STORAGE_KEY);
+        const sWards = localStorage.getItem(hospitalScopedKey(WARDS_STORAGE_KEY));
         if (sWards) setWards(JSON.parse(sWards));
 
-        const sEq = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+        const sEq = localStorage.getItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY));
         if (sEq) setEquipment(JSON.parse(sEq));
 
-        const sRes = localStorage.getItem(RESOURCES_STORAGE_KEY);
+        const sRes = localStorage.getItem(hospitalScopedKey(RESOURCES_STORAGE_KEY));
         if (sRes) setResources(JSON.parse(sRes));
 
-        const sStaff = localStorage.getItem(STAFF_STORAGE_KEY);
+        const sStaff = localStorage.getItem(hospitalScopedKey(STAFF_STORAGE_KEY));
         if (sStaff) setStaff(JSON.parse(sStaff));
 
-        const sReq = localStorage.getItem(REQUESTS_STORAGE_KEY);
+        const sReq = localStorage.getItem(hospitalScopedKey(REQUESTS_STORAGE_KEY));
         if (sReq) setRequests(JSON.parse(sReq));
 
-        const sDep = localStorage.getItem(DEPARTMENTS_STORAGE_KEY);
+        const sDep = localStorage.getItem(hospitalScopedKey(DEPARTMENTS_STORAGE_KEY));
         if (sDep) setDepartments(JSON.parse(sDep));
       } catch (e) {
         console.error(e);

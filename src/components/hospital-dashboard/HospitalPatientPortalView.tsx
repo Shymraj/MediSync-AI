@@ -35,6 +35,12 @@ import {
   Check
 } from 'lucide-react';
 import { Hospital } from '../../types';
+import {
+  isMatchingHospital,
+  OPD_REQUESTS_STORAGE_KEY,
+  OPD_UPDATE_EVENT,
+  generateHospitalPatientToken
+} from '../../utils/hospitalSync';
 
 export interface HospitalOPDRequestItem {
   tokenNumber: string;
@@ -48,6 +54,9 @@ export interface HospitalOPDRequestItem {
   purpose: string;
   patientName: string;
   patientMobile: string;
+  patientAge?: string;
+  bloodGroup?: string;
+  symptomsDescription?: string;
   patientAgeGender?: string;
   counterNumber?: string;
   queuePosition?: number;
@@ -93,6 +102,7 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
   // Search & Filter State
   const [searchQuery, setSearchQuery] = useState('');
   const [priorityFilter, setPriorityFilter] = useState<'all' | 'CRITICAL' | 'HIGH' | 'MODERATE' | 'LOW'>('all');
+  const [requestSourceFilter, setRequestSourceFilter] = useState<'all' | 'opd' | 'ai_emergency'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'in_queue' | 'called' | 'completed' | 'declined'>('all');
 
   // Requests Data from localStorage (synchronized across patient & hospital portals)
@@ -113,14 +123,16 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
   const [currentServingIndex, setCurrentServingIndex] = useState(0);
   const [queueCallNotification, setQueueCallNotification] = useState<string | null>(null);
 
-  // Initial Seed Data Generator if empty
+  // Initial Seed Data strictly scoped to RGGGH (Hos_Id-101) so other hospitals start clean
   const getInitialRequests = (): HospitalOPDRequestItem[] => {
+    const seedHospitalId = 'Hos_Id-101';
+    const seedHospitalName = 'Rajiv Gandhi Government General Hospital (RGGGH)';
     return [
       {
         tokenNumber: 'TK-CRIT-4821',
         requestId: 'REQ-RGGGH-9102',
-        hospitalId: hospital.id || 'hosp-chn-01',
-        hospitalName: hospital.name,
+        hospitalId: seedHospitalId,
+        hospitalName: seedHospitalName,
         department: 'Emergency & Cardiology Triage',
         doctorName: 'Pending Doctor Allocation',
         date: '2026-11-28',
@@ -140,14 +152,14 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
         confidenceScore: 0.96,
         safetyFlags: ['Severe chest discomfort with dyspnea', 'Clinical safety red-line triggered'],
         priorityReason: 'High-risk acute cardiac symptom cluster with acute breathing difficulty. Requires immediate resuscitation triage.',
-        recommendedAction: `Immediate transfer to ${hospital.name} Emergency / Red Bay. Duty emergency physician alerted.`,
+        recommendedAction: `Immediate transfer to ${seedHospitalName} Emergency / Red Bay. Duty emergency physician alerted.`,
         vitals: { temp: 37.0, heartRate: 118, spo2: 92, painLevel: 8, breathingDifficulty: 'yes', consciousness: 'normal' }
       },
       {
         tokenNumber: 'TK-PRIO-6184',
         requestId: 'REQ-RGGGH-8841',
-        hospitalId: hospital.id || 'hosp-chn-01',
-        hospitalName: hospital.name,
+        hospitalId: seedHospitalId,
+        hospitalName: seedHospitalName,
         department: 'Pulmonology OPD',
         doctorName: 'Dr. Shalini R. (Pulmonology Specialist)',
         date: '2026-11-28',
@@ -173,8 +185,8 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
       {
         tokenNumber: 'TC-RAJ-757',
         requestId: 'REQ-RGGGH-5532',
-        hospitalId: hospital.id || 'hosp-chn-01',
-        hospitalName: hospital.name,
+        hospitalId: seedHospitalId,
+        hospitalName: seedHospitalName,
         department: 'General Medicine OPD',
         doctorName: 'Dr. Sundaramoorthy M.',
         date: '2026-11-28',
@@ -199,18 +211,17 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
     ];
   };
 
-  // Load and listen for changes in localStorage
+  // Load and listen strictly for requests belonging ONLY to this hospital
   const loadRequests = () => {
     try {
-      const stored = localStorage.getItem('medisync_hospital_opd_requests');
-      if (stored) {
+      const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+      if (stored !== null) {
         const parsed = JSON.parse(stored);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          // Filter to show requests for this hospital or unassigned
-          const forThisHospital = parsed.filter(
-            (r: HospitalOPDRequestItem) => !r.hospitalId || r.hospitalId === hospital.id || r.hospitalName === hospital.name
+        if (Array.isArray(parsed)) {
+          const forThisHospital = parsed.filter((r: HospitalOPDRequestItem) =>
+            isMatchingHospital(r, hospital.id, hospital.name)
           );
-          setRequests(forThisHospital.length > 0 ? forThisHospital : parsed);
+          setRequests(forThisHospital);
           setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
           return;
         }
@@ -219,9 +230,9 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
 
     const defaults = getInitialRequests();
     try {
-      localStorage.setItem('medisync_hospital_opd_requests', JSON.stringify(defaults));
+      localStorage.setItem(OPD_REQUESTS_STORAGE_KEY, JSON.stringify(defaults));
     } catch {}
-    setRequests(defaults);
+    setRequests(defaults.filter((r) => isMatchingHospital(r, hospital.id, hospital.name)));
     setLastSyncedTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
   };
 
@@ -229,51 +240,53 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
     loadRequests();
     const handleStorageChange = () => loadRequests();
     window.addEventListener('storage', handleStorageChange);
-    window.addEventListener('medisync_opd_update', handleStorageChange);
+    window.addEventListener(OPD_UPDATE_EVENT, handleStorageChange);
 
-    const interval = setInterval(loadRequests, 4000);
+    const interval = setInterval(loadRequests, 3000);
     return () => {
       window.removeEventListener('storage', handleStorageChange);
-      window.removeEventListener('medisync_opd_update', handleStorageChange);
+      window.removeEventListener(OPD_UPDATE_EVENT, handleStorageChange);
       clearInterval(interval);
     };
   }, [hospital.id, hospital.name]);
 
-  // Sync back to storage & trigger updates
+  // Sync back to storage (keeping every other hospital's requests isolated & intact)
   const saveRequests = (updatedList: HospitalOPDRequestItem[]) => {
     setRequests(updatedList);
     try {
-      // Merge with any other hospital records in localStorage
-      const stored = localStorage.getItem('medisync_hospital_opd_requests');
+      const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
       const allStored = stored ? JSON.parse(stored) : [];
-      const others = allStored.filter(
-        (r: any) => r.hospitalId && r.hospitalId !== hospital.id && r.hospitalName !== hospital.name
-      );
+      const others = Array.isArray(allStored)
+        ? allStored.filter((r: any) => !isMatchingHospital(r, hospital.id, hospital.name))
+        : [];
       const combined = [...updatedList, ...others];
-      localStorage.setItem('medisync_hospital_opd_requests', JSON.stringify(combined));
+      localStorage.setItem(OPD_REQUESTS_STORAGE_KEY, JSON.stringify(combined));
       window.dispatchEvent(new Event('storage'));
-      window.dispatchEvent(new CustomEvent('medisync_opd_update'));
+      window.dispatchEvent(new CustomEvent(OPD_UPDATE_EVENT));
     } catch {}
   };
 
-  // Open Doctor Allocation Modal
+  // Open Approve & Doctor Allocation Modal (generates official <INITIALS>_PAT_XX token)
   const handleOpenDoctorAllocationModal = (req: HospitalOPDRequestItem) => {
     setSelectedRequestForDoctorAllocation(req);
     const isCrit = req.aiPriority === 'CRITICAL';
     const isHigh = req.aiPriority === 'HIGH';
+    const officialPatToken = generateHospitalPatientToken(hospital.name, requests, hospital.id);
+    setAllocatedTokenPreview(officialPatToken);
 
     if (isCrit) {
       setAllocatedDoctorChoice('Dr. Arun Kumar (Emergency Casualty Lead)');
       setAllocatedRoomChoice('Red Bay 1 (Emergency Resuscitation & ICU Bay)');
-      setAllocatedTokenPreview(`TK-CRIT-${Math.floor(1000 + Math.random() * 9000)}`);
     } else if (isHigh) {
       setAllocatedDoctorChoice('Dr. Shalini R. (Pulmonology Specialist)');
       setAllocatedRoomChoice('Priority Triage Counter 1 (Fast-Track)');
-      setAllocatedTokenPreview(`TK-PRIO-${Math.floor(1000 + Math.random() * 9000)}`);
     } else {
-      setAllocatedDoctorChoice('Dr. Sundaramoorthy M. (Senior Consultant - General Medicine)');
-      setAllocatedRoomChoice('OPD Counter 3 (General Consultation)');
-      setAllocatedTokenPreview(`TK-OPD-${Math.floor(1000 + Math.random() * 9000)}`);
+      setAllocatedDoctorChoice(
+        req.doctorName && !req.doctorName.includes('Pending')
+          ? req.doctorName
+          : 'Dr. Sundaramoorthy M. (Senior Consultant - General Medicine)'
+      );
+      setAllocatedRoomChoice(req.counterNumber || 'OPD Counter 3 (General Consultation)');
     }
   };
 
@@ -285,7 +298,7 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
     const targetRequestId = selectedRequestForDoctorAllocation.requestId;
 
     const updated = requests.map(r => {
-      if ((targetToken && r.tokenNumber === targetToken) || (targetRequestId && r.requestId === targetRequestId)) {
+      if ((targetRequestId && r.requestId === targetRequestId) || (targetToken && targetToken !== 'AWAITING-APPROVAL' && r.tokenNumber === targetToken)) {
         return {
           ...r,
           tokenNumber: allocatedTokenPreview,
@@ -324,9 +337,10 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
     const targetReqId = selectedRequestForDecline.requestId;
 
     const updated = requests.map(r => {
-      if ((targetToken && r.tokenNumber === targetToken) || (targetReqId && r.requestId === targetReqId)) {
+      if ((targetReqId && r.requestId === targetReqId) || (targetToken && targetToken !== 'AWAITING-APPROVAL' && r.tokenNumber === targetToken)) {
         return {
           ...r,
+          tokenNumber: 'DECLINED',
           status: 'Declined' as const,
           declineReason: finalReason,
           reviewedAt: new Date().toISOString()
@@ -366,6 +380,10 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
 
   // Filtered List
   const filteredRequests = requests.filter(req => {
+    // Source filter (OPD Appointments vs Emergency AI Queue)
+    if (requestSourceFilter === 'opd' && req.aiPriority) return false;
+    if (requestSourceFilter === 'ai_emergency' && !req.aiPriority) return false;
+
     // Priority filter
     if (priorityFilter !== 'all' && req.aiPriority !== priorityFilter) return false;
 
@@ -470,10 +488,12 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
                 : 'bg-slate-50 text-slate-600 hover:bg-slate-100'
             }`}
           >
-            <Ticket className="w-4 h-4" />
-            <span>Citizen OPD &amp; Emergency Requests ({requests.length})</span>
+            <Calendar className="w-4 h-4" />
+            <span>Appointments ({requests.length})</span>
             {pendingCount > 0 && (
-              <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-500 text-white animate-pulse">
+                {pendingCount} Pending
+              </span>
             )}
           </button>
 
@@ -540,8 +560,26 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
               />
             </div>
 
-            {/* Filter Pills */}
+            {/* Source Type + Urgency Filter Pills */}
             <div className="flex items-center gap-2 flex-wrap">
+              {[
+                { id: 'all', label: 'All Bookings' },
+                { id: 'opd', label: 'OPD Appointments' },
+                { id: 'ai_emergency', label: '🚨 AI Emergency Queue' }
+              ].map(src => (
+                <button
+                  key={src.id}
+                  onClick={() => setRequestSourceFilter(src.id as any)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-black transition-all cursor-pointer border ${
+                    requestSourceFilter === src.id
+                      ? 'bg-slate-900 text-white border-slate-900 shadow-2xs'
+                      : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+                  }`}
+                >
+                  {src.label}
+                </button>
+              ))}
+              <span className="text-slate-300 hidden sm:inline">|</span>
               <span className="text-[11px] font-extrabold uppercase tracking-wider text-slate-400 mr-1 flex items-center gap-1">
                 <Filter className="w-3.5 h-3.5" />
                 Urgency:
@@ -600,15 +638,25 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
                         
                         {/* Token & Badges */}
                         <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`px-3 py-1 rounded-xl font-mono text-xs font-black shadow-2xs ${
-                            isCrit
-                              ? 'bg-red-600 text-white'
-                              : isHigh
-                              ? 'bg-amber-500 text-white'
-                              : 'bg-slate-800 text-white'
-                          }`}>
-                            #{req.tokenNumber}
-                          </span>
+                          {isPending || !req.tokenNumber || req.tokenNumber.startsWith('AWAITING') || req.tokenNumber.startsWith('PENDING') ? (
+                            <span className="px-3 py-1 rounded-xl font-mono text-xs font-black bg-amber-100 text-amber-900 border border-amber-300 shadow-2xs">
+                              {req.requestId || 'Awaiting Approval (No Token Yet)'}
+                            </span>
+                          ) : isDeclined || req.tokenNumber === 'DECLINED' ? (
+                            <span className="px-3 py-1 rounded-xl font-mono text-xs font-black bg-rose-100 text-rose-800 border border-rose-300">
+                              Declined (No Token)
+                            </span>
+                          ) : (
+                            <span className={`px-3 py-1 rounded-xl font-mono text-xs font-black shadow-2xs ${
+                              isCrit
+                                ? 'bg-red-600 text-white'
+                                : isHigh
+                                ? 'bg-amber-500 text-white'
+                                : 'bg-emerald-700 text-white'
+                            }`}>
+                              Token: {req.tokenNumber}
+                            </span>
+                          )}
 
                           {/* Urgency Badge */}
                           <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase flex items-center gap-1 ${
@@ -650,8 +698,13 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
                             {req.patientName}
                           </h3>
                           <span className="text-xs text-slate-500 font-bold">
-                            &bull; {req.patientAgeGender || 'Adult'}
+                            &bull; {req.patientAge ? `Age: ${req.patientAge}` : (req.patientAgeGender || 'Adult')}
                           </span>
+                          {req.bloodGroup && (
+                            <span className="text-[11px] font-black text-rose-700 bg-rose-50 px-2 py-0.5 rounded-md border border-rose-200">
+                              🩸 {req.bloodGroup}
+                            </span>
+                          )}
                           <span className="text-xs font-mono text-slate-600 flex items-center gap-1 bg-slate-100 px-2 py-0.5 rounded-md">
                             <Phone className="w-3 h-3 text-slate-400" />
                             {req.patientMobile}
@@ -661,12 +714,28 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
                           </span>
                         </div>
 
-                        {/* Symptoms & Vitals Telemetry */}
+                        {/* Date, Time Slot & Symptoms / Purpose filled by Patient */}
                         <div className="p-3 bg-slate-50 rounded-2xl border border-slate-100 space-y-1.5 text-xs">
+                          <div className="flex items-center gap-3 flex-wrap text-[11px] font-bold text-slate-700 pb-1 border-b border-slate-200/70">
+                            <span className="flex items-center gap-1">
+                              <Calendar className="w-3.5 h-3.5 text-purple-600" />
+                              Date: {req.date}
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3.5 h-3.5 text-purple-600" />
+                              Slot: {req.timeSlot}
+                            </span>
+                          </div>
                           <div className="text-slate-800 font-semibold flex items-start gap-1.5">
-                            <span className="font-bold text-slate-400 shrink-0">Complaints:</span>
+                            <span className="font-bold text-slate-400 shrink-0">Purpose:</span>
                             <span>{req.purpose}</span>
                           </div>
+                          {req.symptomsDescription && (
+                            <div className="text-slate-700 flex items-start gap-1.5">
+                              <span className="font-bold text-slate-400 shrink-0">Symptoms:</span>
+                              <span>{req.symptomsDescription}</span>
+                            </div>
+                          )}
 
                           {req.vitals && (
                             <div className="flex items-center gap-3 text-[11px] font-bold text-slate-600 flex-wrap pt-0.5">
@@ -738,7 +807,7 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
                               }`}
                             >
                               <UserCheck className="w-4 h-4 stroke-[2.5]" />
-                              <span>{isCrit ? 'Accept & Allocate Doctor (அவசரம்)' : 'Accept & Allocate Doctor'}</span>
+                              <span>{isCrit ? 'Approve & Issue Token (அவசரம்)' : 'Approve & Issue Token'}</span>
                             </button>
 
                             <button
@@ -1105,7 +1174,7 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
             {/* Generated Token Preview */}
             <div className="p-3.5 rounded-2xl bg-purple-50 border border-purple-200 flex items-center justify-between">
               <div>
-                <span className="text-[10px] text-purple-800 font-extrabold uppercase block">Generated Priority Token:</span>
+                <span className="text-[10px] text-purple-800 font-extrabold uppercase block">Official Approved Patient Token:</span>
                 <span className="text-base font-black font-mono text-purple-950">{allocatedTokenPreview}</span>
               </div>
               <span className="px-2 py-1 rounded-lg bg-white text-[10px] font-black text-purple-700 border border-purple-200">
@@ -1132,7 +1201,7 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
                 }`}
               >
                 <Check className="w-4 h-4 stroke-[2.5]" />
-                <span>Confirm &amp; Issue Priority Token</span>
+                <span>Approve &amp; Issue {allocatedTokenPreview}</span>
               </button>
             </div>
 
@@ -1159,7 +1228,7 @@ export const HospitalPatientPortalView: React.FC<HospitalPatientPortalViewProps>
                     Decline Appointment Request
                   </h3>
                   <div className="text-xs text-slate-500">
-                    {hospital.name} &bull; Token #{selectedRequestForDecline.tokenNumber}
+                    {hospital.name} &bull; {selectedRequestForDecline.requestId || selectedRequestForDecline.patientName}
                   </div>
                 </div>
               </div>

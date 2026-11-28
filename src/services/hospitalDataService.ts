@@ -4,6 +4,11 @@
 
 import { io, Socket } from 'socket.io-client';
 import { api } from './api';
+import {
+  getActiveHospitalScopeId,
+  setActiveHospitalScopeId,
+  hospitalScopedKey
+} from '../utils/hospitalSync';
 
 import { 
   BedItem, 
@@ -120,7 +125,7 @@ export class HospitalDataService {
       });
 
       this.socket.on('connect', () => {
-        this.socket?.emit('join_hospital', 'hosp-chn-01');
+        this.socket?.emit('join_hospital', getActiveHospitalScopeId());
       });
 
       this.socket.on('bed_updated', (data) => {
@@ -187,40 +192,52 @@ export class HospitalDataService {
     } catch {}
   }
 
+  public setHospitalContext(hospitalId: string) {
+    if (!hospitalId) return;
+    setActiveHospitalScopeId(hospitalId);
+    try {
+      this.socket?.emit('join_hospital', hospitalId);
+    } catch {}
+    this.ensureInitialized();
+    this.broadcastUpdate('hospital_context_switched', { hospitalId });
+  }
+
   public async hydrateFromBackend() {
     if (typeof window === 'undefined') return;
     try {
-      const data = await api.getHospitalDashboard('hosp-chn-01');
+      const activeId = getActiveHospitalScopeId();
+      if (activeId !== 'hosp-chn-01' && activeId !== 'Hos_Id-101') return;
+      const data = await api.getHospitalDashboard(activeId);
       if (data) {
         if (data.beds && data.beds.length > 0) {
-          localStorage.setItem(BEDS_STORAGE_KEY, JSON.stringify(data.beds));
+          localStorage.setItem(hospitalScopedKey(BEDS_STORAGE_KEY), JSON.stringify(data.beds));
         }
         if (data.patients && data.patients.length > 0) {
-          localStorage.setItem(PATIENTS_STORAGE_KEY, JSON.stringify(data.patients));
+          localStorage.setItem(hospitalScopedKey(PATIENTS_STORAGE_KEY), JSON.stringify(data.patients));
         }
         if (data.requests && data.requests.length > 0) {
-          localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(data.requests));
+          localStorage.setItem(hospitalScopedKey(REQUESTS_STORAGE_KEY), JSON.stringify(data.requests));
         }
         if (data.equipment && data.equipment.length > 0) {
-          localStorage.setItem(EQUIPMENT_STORAGE_KEY, JSON.stringify(data.equipment));
+          localStorage.setItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY), JSON.stringify(data.equipment));
         }
         if (data.clinicalTasks && data.clinicalTasks.length > 0) {
-          localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(data.clinicalTasks));
+          localStorage.setItem(hospitalScopedKey(TASKS_STORAGE_KEY), JSON.stringify(data.clinicalTasks));
         }
         if (data.clinicalAlerts && data.clinicalAlerts.length > 0) {
-          localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(data.clinicalAlerts));
+          localStorage.setItem(hospitalScopedKey(ALERTS_STORAGE_KEY), JSON.stringify(data.clinicalAlerts));
         }
         if (data.appointments && data.appointments.length > 0) {
-          localStorage.setItem(APPOINTMENTS_STORAGE_KEY, JSON.stringify(data.appointments));
+          localStorage.setItem(hospitalScopedKey(APPOINTMENTS_STORAGE_KEY), JSON.stringify(data.appointments));
         }
         if (data.labReports && data.labReports.length > 0) {
-          localStorage.setItem(LABS_STORAGE_KEY, JSON.stringify(data.labReports));
+          localStorage.setItem(hospitalScopedKey(LABS_STORAGE_KEY), JSON.stringify(data.labReports));
         }
         if (data.prescriptions && data.prescriptions.length > 0) {
-          localStorage.setItem(PRESCRIPTIONS_STORAGE_KEY, JSON.stringify(data.prescriptions));
+          localStorage.setItem(hospitalScopedKey(PRESCRIPTIONS_STORAGE_KEY), JSON.stringify(data.prescriptions));
         }
         if (data.pendingAdmissions && data.pendingAdmissions.length > 0) {
-          localStorage.setItem(ADMISSIONS_STORAGE_KEY, JSON.stringify(data.pendingAdmissions));
+          localStorage.setItem(hospitalScopedKey(ADMISSIONS_STORAGE_KEY), JSON.stringify(data.pendingAdmissions));
         }
         this.broadcastUpdate('backend_hydrated');
       }
@@ -235,7 +252,7 @@ export class HospitalDataService {
       if (data.patient !== undefined) bed.patient = data.patient;
       if (data.patientName !== undefined) bed.patient = data.patientName;
       bed.lastUpdated = data.lastUpdated || 'Just now';
-      localStorage.setItem(BEDS_STORAGE_KEY, JSON.stringify(beds));
+      localStorage.setItem(hospitalScopedKey(BEDS_STORAGE_KEY), JSON.stringify(beds));
       this.broadcastUpdate('bed_updated', bed);
     }
   }
@@ -245,7 +262,7 @@ export class HospitalDataService {
     const idx = patients.findIndex(p => p.patientId === data.patient_id || p.patientId === data.patientId);
     if (idx >= 0) {
       patients[idx] = { ...patients[idx], ...data };
-      localStorage.setItem(PATIENTS_STORAGE_KEY, JSON.stringify(patients));
+      localStorage.setItem(hospitalScopedKey(PATIENTS_STORAGE_KEY), JSON.stringify(patients));
       this.broadcastUpdate('patient_updated', patients[idx]);
     }
   }
@@ -254,7 +271,7 @@ export class HospitalDataService {
     const requests = this.getResourceRequests();
     if (!requests.some(r => r.id === req.id || r.requestId === req.request_id)) {
       requests.unshift(req);
-      localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(requests));
+      localStorage.setItem(hospitalScopedKey(REQUESTS_STORAGE_KEY), JSON.stringify(requests));
       this.broadcastUpdate('request_created', req);
     }
   }
@@ -264,7 +281,7 @@ export class HospitalDataService {
     const idx = requests.findIndex(r => r.id === req.id || r.requestId === req.request_id);
     if (idx >= 0) {
       requests[idx] = { ...requests[idx], ...req };
-      localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(requests));
+      localStorage.setItem(hospitalScopedKey(REQUESTS_STORAGE_KEY), JSON.stringify(requests));
       this.broadcastUpdate('request_updated', requests[idx]);
     }
   }
@@ -273,7 +290,7 @@ export class HospitalDataService {
     const tasks = this.getDoctorNurseTasks();
     if (!tasks.some(t => t.id === task.id)) {
       tasks.unshift(task);
-      localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+      localStorage.setItem(hospitalScopedKey(TASKS_STORAGE_KEY), JSON.stringify(tasks));
       this.broadcastUpdate('doctor_nurse_task_created', task);
     }
   }
@@ -283,7 +300,7 @@ export class HospitalDataService {
     const idx = tasks.findIndex(t => t.id === task.id);
     if (idx >= 0) {
       tasks[idx] = { ...tasks[idx], ...task };
-      localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+      localStorage.setItem(hospitalScopedKey(TASKS_STORAGE_KEY), JSON.stringify(tasks));
       this.broadcastUpdate('doctor_nurse_task_updated', tasks[idx]);
     }
   }
@@ -292,7 +309,7 @@ export class HospitalDataService {
     const alerts = this.getClinicalAlerts();
     if (!alerts.some(a => a.id === alert.id)) {
       alerts.unshift(alert);
-      localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+      localStorage.setItem(hospitalScopedKey(ALERTS_STORAGE_KEY), JSON.stringify(alerts));
       this.broadcastUpdate('clinical_alert_created', alert);
     }
   }
@@ -302,7 +319,7 @@ export class HospitalDataService {
     const idx = alerts.findIndex(a => a.id === alert.id);
     if (idx >= 0) {
       alerts[idx] = { ...alerts[idx], ...alert };
-      localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+      localStorage.setItem(hospitalScopedKey(ALERTS_STORAGE_KEY), JSON.stringify(alerts));
       this.broadcastUpdate('clinical_alert_updated', alerts[idx]);
     }
   }
@@ -310,28 +327,28 @@ export class HospitalDataService {
   private ensureInitialized() {
     if (typeof window === 'undefined') return;
 
-    if (!localStorage.getItem(BEDS_STORAGE_KEY)) {
-      localStorage.setItem(BEDS_STORAGE_KEY, JSON.stringify(INITIAL_BEDS));
+    if (!localStorage.getItem(hospitalScopedKey(BEDS_STORAGE_KEY))) {
+      localStorage.setItem(hospitalScopedKey(BEDS_STORAGE_KEY), JSON.stringify(INITIAL_BEDS));
     }
-    if (!localStorage.getItem(WARDS_STORAGE_KEY)) {
-      localStorage.setItem(WARDS_STORAGE_KEY, JSON.stringify(INITIAL_WARDS));
+    if (!localStorage.getItem(hospitalScopedKey(WARDS_STORAGE_KEY))) {
+      localStorage.setItem(hospitalScopedKey(WARDS_STORAGE_KEY), JSON.stringify(INITIAL_WARDS));
     }
-    if (!localStorage.getItem(REQUESTS_STORAGE_KEY)) {
-      localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(INITIAL_REQUESTS));
+    if (!localStorage.getItem(hospitalScopedKey(REQUESTS_STORAGE_KEY))) {
+      localStorage.setItem(hospitalScopedKey(REQUESTS_STORAGE_KEY), JSON.stringify(INITIAL_REQUESTS));
     }
-    if (!localStorage.getItem(EQUIPMENT_STORAGE_KEY)) {
-      localStorage.setItem(EQUIPMENT_STORAGE_KEY, JSON.stringify(INITIAL_EQUIPMENT));
+    if (!localStorage.getItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY))) {
+      localStorage.setItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY), JSON.stringify(INITIAL_EQUIPMENT));
     }
-    if (!localStorage.getItem(PATIENTS_STORAGE_KEY)) {
-      localStorage.setItem(PATIENTS_STORAGE_KEY, JSON.stringify(INITIAL_CLINICAL_PATIENTS));
+    if (!localStorage.getItem(hospitalScopedKey(PATIENTS_STORAGE_KEY))) {
+      localStorage.setItem(hospitalScopedKey(PATIENTS_STORAGE_KEY), JSON.stringify(INITIAL_CLINICAL_PATIENTS));
     }
-    if (!localStorage.getItem(TASKS_STORAGE_KEY)) {
-      localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(INITIAL_DOCTOR_NURSE_TASKS));
+    if (!localStorage.getItem(hospitalScopedKey(TASKS_STORAGE_KEY))) {
+      localStorage.setItem(hospitalScopedKey(TASKS_STORAGE_KEY), JSON.stringify(INITIAL_DOCTOR_NURSE_TASKS));
     }
-    if (!localStorage.getItem(ALERTS_STORAGE_KEY)) {
-      localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(INITIAL_EARLY_WARNING_ALERTS));
+    if (!localStorage.getItem(hospitalScopedKey(ALERTS_STORAGE_KEY))) {
+      localStorage.setItem(hospitalScopedKey(ALERTS_STORAGE_KEY), JSON.stringify(INITIAL_EARLY_WARNING_ALERTS));
     }
-    if (!localStorage.getItem(NOTIFICATIONS_STORAGE_KEY)) {
+    if (!localStorage.getItem(hospitalScopedKey(NOTIFICATIONS_STORAGE_KEY))) {
       const defaultNotifications: SharedNotification[] = [
         {
           id: 'notif-01',
@@ -355,14 +372,14 @@ export class HospitalDataService {
           patientId: 'PT-8941'
         }
       ];
-      localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(defaultNotifications));
+      localStorage.setItem(hospitalScopedKey(NOTIFICATIONS_STORAGE_KEY), JSON.stringify(defaultNotifications));
     }
   }
 
   // 1. PATIENT REGISTRY INTEGRATION
   public getPatients(): PatientDigitalTwin[] {
     try {
-      const data = localStorage.getItem(PATIENTS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(PATIENTS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_CLINICAL_PATIENTS;
@@ -453,7 +470,7 @@ export class HospitalDataService {
       patients.unshift(updatedPatient);
     }
 
-    localStorage.setItem(PATIENTS_STORAGE_KEY, JSON.stringify(patients));
+    localStorage.setItem(hospitalScopedKey(PATIENTS_STORAGE_KEY), JSON.stringify(patients));
 
     this.addNotification({
       title: 'Patient Intake Admitted',
@@ -472,7 +489,7 @@ export class HospitalDataService {
   // 2. BED & WARD INTEGRATION WITH PREVENTING DOUBLE ASSIGNMENT
   public getBeds(): BedItem[] {
     try {
-      const data = localStorage.getItem(BEDS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(BEDS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_BEDS;
@@ -496,7 +513,7 @@ export class HospitalDataService {
 
       return {
         id: b.id,
-        hospitalId: 'hosp-chn-01',
+        hospitalId: getActiveHospitalScopeId(),
         ward: b.ward,
         bedNumber: b.bedId,
         type,
@@ -559,7 +576,7 @@ export class HospitalDataService {
       notes: `Bed assigned to ${patientName} (${patientId})`
     });
 
-    localStorage.setItem(BEDS_STORAGE_KEY, JSON.stringify(beds));
+    localStorage.setItem(hospitalScopedKey(BEDS_STORAGE_KEY), JSON.stringify(beds));
 
     // Update patient record
     this.admitOrUpdatePatient({
@@ -618,7 +635,7 @@ export class HospitalDataService {
       notes: notes || `Bed status progressed from ${oldStatus} to ${newStatus}`
     });
 
-    localStorage.setItem(BEDS_STORAGE_KEY, JSON.stringify(beds));
+    localStorage.setItem(hospitalScopedKey(BEDS_STORAGE_KEY), JSON.stringify(beds));
 
     this.addNotification({
       title: 'Bed Status Transition',
@@ -637,7 +654,7 @@ export class HospitalDataService {
   // 3. EMERGENCY RESOURCE COORDINATION WORKFLOW
   public getResourceRequests(): ResourceRequestItem[] {
     try {
-      const data = localStorage.getItem(REQUESTS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(REQUESTS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_REQUESTS;
@@ -696,7 +713,7 @@ export class HospitalDataService {
     };
 
     requests.unshift(newRequest);
-    localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(requests));
+    localStorage.setItem(hospitalScopedKey(REQUESTS_STORAGE_KEY), JSON.stringify(requests));
 
     // Notify Hospital Admin
     this.addNotification({
@@ -763,7 +780,7 @@ export class HospitalDataService {
         : `Approved & Allocated: ${params.allocatedResourceId || 'Inventory units assigned'}`
     });
 
-    localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(requests));
+    localStorage.setItem(hospitalScopedKey(REQUESTS_STORAGE_KEY), JSON.stringify(requests));
 
     // Handle physical allocation if approved
     if (params.decision === 'Approved' || params.decision === 'Allocated') {
@@ -842,7 +859,7 @@ export class HospitalDataService {
   // 4. DOCTOR–NURSE COMMUNICATION & CLOSED-LOOP TASKS
   public getDoctorNurseTasks(): DoctorNurseTaskItem[] {
     try {
-      const data = localStorage.getItem(TASKS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(TASKS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_DOCTOR_NURSE_TASKS;
@@ -876,7 +893,7 @@ export class HospitalDataService {
     };
 
     tasks.unshift(newTask);
-    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(hospitalScopedKey(TASKS_STORAGE_KEY), JSON.stringify(tasks));
 
     // Notify Nurse
     this.addNotification({
@@ -929,7 +946,7 @@ export class HospitalDataService {
       task.completedAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     }
 
-    localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
+    localStorage.setItem(hospitalScopedKey(TASKS_STORAGE_KEY), JSON.stringify(tasks));
 
     // If vitals were recorded and indicate decompensation, generate Clinical Alert
     if (params.recordedVitals) {
@@ -990,7 +1007,7 @@ export class HospitalDataService {
   // 5. CLINICAL ALERT INTEGRATION
   public getClinicalAlerts(): EarlyWarningAlertItem[] {
     try {
-      const data = localStorage.getItem(ALERTS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(ALERTS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_EARLY_WARNING_ALERTS;
@@ -1006,7 +1023,7 @@ export class HospitalDataService {
     };
 
     alerts.unshift(newAlert);
-    localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+    localStorage.setItem(hospitalScopedKey(ALERTS_STORAGE_KEY), JSON.stringify(alerts));
 
     // Update patient MEWS and risk level in registry
     const patients = this.getPatients();
@@ -1024,7 +1041,7 @@ export class HospitalDataService {
         actor: 'Bedside Telemetry Radar',
         severity: 'critical'
       });
-      localStorage.setItem(PATIENTS_STORAGE_KEY, JSON.stringify(patients));
+      localStorage.setItem(hospitalScopedKey(PATIENTS_STORAGE_KEY), JSON.stringify(patients));
     }
 
     this.addNotification({
@@ -1047,7 +1064,7 @@ export class HospitalDataService {
 
     alert.status = 'Acknowledged';
     alert.reason += ` [Acknowledged by ${doctorName}]`;
-    localStorage.setItem(ALERTS_STORAGE_KEY, JSON.stringify(alerts));
+    localStorage.setItem(hospitalScopedKey(ALERTS_STORAGE_KEY), JSON.stringify(alerts));
 
     this.broadcastUpdate('alert_acknowledged', alert);
     api.acknowledgeClinicalAlert(alertId, { notes: `Acknowledged by ${doctorName}`, status: 'Acknowledged' }).catch(() => {});
@@ -1057,7 +1074,7 @@ export class HospitalDataService {
   // 6. SHARED NOTIFICATION SYSTEM
   public getNotifications(): SharedNotification[] {
     try {
-      const data = localStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(NOTIFICATIONS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return [];
@@ -1073,7 +1090,7 @@ export class HospitalDataService {
     };
 
     notifications.unshift(newNotif);
-    localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications.slice(0, 50)));
+    localStorage.setItem(hospitalScopedKey(NOTIFICATIONS_STORAGE_KEY), JSON.stringify(notifications.slice(0, 50)));
     this.broadcastUpdate('notification_added', newNotif);
     return newNotif;
   }
@@ -1083,7 +1100,7 @@ export class HospitalDataService {
     const notif = notifications.find(n => n.id === id);
     if (notif) {
       notif.read = true;
-      localStorage.setItem(NOTIFICATIONS_STORAGE_KEY, JSON.stringify(notifications));
+      localStorage.setItem(hospitalScopedKey(NOTIFICATIONS_STORAGE_KEY), JSON.stringify(notifications));
       this.broadcastUpdate('notification_read', id);
     }
   }
@@ -1096,7 +1113,7 @@ export class HospitalDataService {
   // 7. EQUIPMENT INTEGRATION
   public getEquipment(): EquipmentItem[] {
     try {
-      const data = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_EQUIPMENT;
@@ -1111,7 +1128,7 @@ export class HospitalDataService {
     if (department) eq.department = department;
     eq.lastUpdated = 'Just now';
 
-    localStorage.setItem(EQUIPMENT_STORAGE_KEY, JSON.stringify(equipmentList));
+    localStorage.setItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY), JSON.stringify(equipmentList));
     this.broadcastUpdate('equipment_updated', eq);
     return eq;
   }
@@ -1119,7 +1136,7 @@ export class HospitalDataService {
   // 8. APPOINTMENTS INTEGRATION
   public getAppointments(): any[] {
     try {
-      const data = localStorage.getItem(APPOINTMENTS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(APPOINTMENTS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return [
@@ -1136,7 +1153,7 @@ export class HospitalDataService {
     const item = list.find(a => a.id === aptId);
     if (item) {
       item.status = newStatus;
-      localStorage.setItem(APPOINTMENTS_STORAGE_KEY, JSON.stringify(list));
+      localStorage.setItem(hospitalScopedKey(APPOINTMENTS_STORAGE_KEY), JSON.stringify(list));
       this.broadcastUpdate('appointment_updated', item);
     }
     // Also attempt remote update in background
@@ -1146,7 +1163,7 @@ export class HospitalDataService {
   // 9. LAB REPORTS INTEGRATION
   public getLabReports(): any[] {
     try {
-      const data = localStorage.getItem(LABS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(LABS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return [];
@@ -1155,14 +1172,14 @@ export class HospitalDataService {
   public addLabReport(report: any): void {
     const list = this.getLabReports();
     list.unshift(report);
-    localStorage.setItem(LABS_STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(hospitalScopedKey(LABS_STORAGE_KEY), JSON.stringify(list));
     this.broadcastUpdate('lab_report_created', report);
   }
 
   // 10. PRESCRIPTIONS INTEGRATION
   public getPrescriptions(): any[] {
     try {
-      const data = localStorage.getItem(PRESCRIPTIONS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(PRESCRIPTIONS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return [];
@@ -1171,14 +1188,14 @@ export class HospitalDataService {
   public addPrescription(rx: any): void {
     const list = this.getPrescriptions();
     list.unshift(rx);
-    localStorage.setItem(PRESCRIPTIONS_STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(hospitalScopedKey(PRESCRIPTIONS_STORAGE_KEY), JSON.stringify(list));
     this.broadcastUpdate('prescription_created', rx);
   }
 
   // 11. PENDING ADMISSIONS INTEGRATION
   public getPendingAdmissions(): any[] {
     try {
-      const data = localStorage.getItem(ADMISSIONS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(ADMISSIONS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return [
@@ -1193,7 +1210,7 @@ export class HospitalDataService {
     const item = list.find(a => a.id === admId);
     if (item) {
       item.status = 'Admitted';
-      localStorage.setItem(ADMISSIONS_STORAGE_KEY, JSON.stringify(list.filter(a => a.id !== admId)));
+      localStorage.setItem(hospitalScopedKey(ADMISSIONS_STORAGE_KEY), JSON.stringify(list.filter(a => a.id !== admId)));
       this.broadcastUpdate('admission_accepted', item);
     }
     // Also attempt remote update
@@ -1203,20 +1220,20 @@ export class HospitalDataService {
   // 12. INTEROPERABILITY & HEALTH DATA EXCHANGE
   public getInteroperabilityConnections(): InteroperabilityConnection[] {
     try {
-      const data = localStorage.getItem(INTEROP_CONNS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(INTEROP_CONNS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_INTEROPERABILITY_CONNECTIONS;
   }
 
   public saveInteroperabilityConnections(conns: InteroperabilityConnection[]): void {
-    localStorage.setItem(INTEROP_CONNS_STORAGE_KEY, JSON.stringify(conns));
+    localStorage.setItem(hospitalScopedKey(INTEROP_CONNS_STORAGE_KEY), JSON.stringify(conns));
     this.broadcastUpdate('interop_connections_updated', conns);
   }
 
   public getExchangeTransactions(): ExchangeTransaction[] {
     try {
-      const data = localStorage.getItem(INTEROP_EXCHANGES_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(INTEROP_EXCHANGES_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_EXCHANGE_TRANSACTIONS;
@@ -1225,26 +1242,26 @@ export class HospitalDataService {
   public addExchangeTransaction(tx: ExchangeTransaction): void {
     const list = this.getExchangeTransactions();
     list.unshift(tx);
-    localStorage.setItem(INTEROP_EXCHANGES_STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(hospitalScopedKey(INTEROP_EXCHANGES_STORAGE_KEY), JSON.stringify(list));
     this.broadcastUpdate('interop_exchange_added', tx);
   }
 
   public getAbdmConsents(): ABDMConsentArtefact[] {
     try {
-      const data = localStorage.getItem(ABDM_CONSENTS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(ABDM_CONSENTS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_ABDM_CONSENTS;
   }
 
   public saveAbdmConsents(consents: ABDMConsentArtefact[]): void {
-    localStorage.setItem(ABDM_CONSENTS_STORAGE_KEY, JSON.stringify(consents));
+    localStorage.setItem(hospitalScopedKey(ABDM_CONSENTS_STORAGE_KEY), JSON.stringify(consents));
     this.broadcastUpdate('abdm_consents_updated', consents);
   }
 
   public getInboundPatientImports(): InboundPatientImport[] {
     try {
-      const data = localStorage.getItem(INBOUND_IMPORTS_STORAGE_KEY);
+      const data = localStorage.getItem(hospitalScopedKey(INBOUND_IMPORTS_STORAGE_KEY));
       if (data) return JSON.parse(data);
     } catch {}
     return INITIAL_INBOUND_PATIENT_IMPORTS;
@@ -1257,7 +1274,7 @@ export class HospitalDataService {
       item.stagedStatus = status;
       item.reviewNotes = notes;
       item.reviewedBy = reviewer || 'Dr. Sundaramoorthy M.';
-      localStorage.setItem(INBOUND_IMPORTS_STORAGE_KEY, JSON.stringify(list));
+      localStorage.setItem(hospitalScopedKey(INBOUND_IMPORTS_STORAGE_KEY), JSON.stringify(list));
       this.broadcastUpdate('inbound_import_updated', item);
     }
   }

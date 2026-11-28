@@ -38,6 +38,7 @@ import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
 import { Modal } from '../common/Modal';
 import { useApp } from '../../context/AppContext';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 import { HOSPITAL_DEMO_DATA, HospitalInfo } from '../../data/hospitalDemoData';
 import { INITIAL_BEDS, BedItem } from '../../data/bedDemoData';
 import { INITIAL_EQUIPMENT, EquipmentItem } from '../../data/equipmentDemoData';
@@ -203,20 +204,42 @@ interface HospitalSettingsPageProps {
 }
 
 export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSelectTab }) => {
-  const { user } = useApp();
+  const { user, tempOnboarding } = useApp();
 
   // Active sub-tab within settings: 'hospital' | 'thresholds' | 'notifications' | 'access' | 'system'
   const [activeSubTab, setActiveSubTab] = useState<'hospital' | 'thresholds' | 'notifications' | 'access' | 'system'>('hospital');
 
-  // 1. Hospital Details State (Persisted)
+  // 1. Hospital Details State (Persisted + Synced with generated Hos_Id-XXX)
   const [hospitalDetails, setHospitalDetails] = useState<HospitalDetailsForm>(() => {
     try {
-      const saved = localStorage.getItem(HOSPITAL_INFO_STORAGE_KEY);
-      if (saved) return JSON.parse(saved);
+      const saved = localStorage.getItem(hospitalScopedKey(HOSPITAL_INFO_STORAGE_KEY));
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_HOSPITAL_DETAILS,
+          ...parsed,
+          hospitalId: tempOnboarding?.hospitalId || parsed.hospitalId || user?.hospitalId || DEFAULT_HOSPITAL_DETAILS.hospitalId,
+          hospitalName: tempOnboarding?.hospitalName || parsed.hospitalName || user?.hospitalName || DEFAULT_HOSPITAL_DETAILS.hospitalName
+        };
+      }
     } catch (e) {
       console.error(e);
     }
-    return DEFAULT_HOSPITAL_DETAILS;
+    const activeHId = tempOnboarding?.hospitalId || user?.hospitalId || DEFAULT_HOSPITAL_DETAILS.hospitalId;
+    const activeHName = tempOnboarding?.hospitalName || user?.hospitalName || DEFAULT_HOSPITAL_DETAILS.hospitalName;
+    const isCustomHospital = activeHName !== DEFAULT_HOSPITAL_DETAILS.hospitalName;
+    return {
+      ...DEFAULT_HOSPITAL_DETAILS,
+      hospitalId: activeHId,
+      hospitalName: activeHName,
+      hospitalType: tempOnboarding?.hospitalType || (isCustomHospital ? 'Registered Multi-Department Hospital' : DEFAULT_HOSPITAL_DETAILS.hospitalType),
+      address: tempOnboarding?.hospitalAddress
+        ? `${tempOnboarding.hospitalAddress}${tempOnboarding.areaLocality ? ', ' + tempOnboarding.areaLocality : ''}${tempOnboarding.districtName ? ', ' + tempOnboarding.districtName : ''}`
+        : (isCustomHospital ? `${tempOnboarding?.districtName || user?.districtName || 'Tamil Nadu'}` : DEFAULT_HOSPITAL_DETAILS.address),
+      contactNumber: tempOnboarding?.emergencyContact || tempOnboarding?.hospitalPhone || (isCustomHospital ? '24x7 Helpline Active' : DEFAULT_HOSPITAL_DETAILS.contactNumber),
+      officialEmail: tempOnboarding?.hospitalEmail || user?.email || DEFAULT_HOSPITAL_DETAILS.officialEmail,
+      hospitalAdministrator: tempOnboarding?.name ? `${tempOnboarding.name} (Hospital Administrator)` : `${activeHName} Administration`
+    };
   });
 
   const [isEditingHospital, setIsEditingHospital] = useState(false);
@@ -226,7 +249,7 @@ export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSe
   // 2. Settings State (Persisted)
   const [settings, setSettings] = useState<AllHospitalSettings>(() => {
     try {
-      const saved = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(SETTINGS_STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         return {
@@ -280,7 +303,7 @@ export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSe
     // A. Beds
     let bedsList: BedItem[] = INITIAL_BEDS;
     try {
-      const s = localStorage.getItem(BEDS_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(BEDS_STORAGE_KEY));
       if (s) bedsList = JSON.parse(s);
     } catch (e) {
       console.error(e);
@@ -291,7 +314,7 @@ export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSe
     // B. Equipment
     let equipList: EquipmentItem[] = INITIAL_EQUIPMENT;
     try {
-      const s = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY));
       if (s) equipList = JSON.parse(s);
     } catch (e) {
       console.error(e);
@@ -306,7 +329,7 @@ export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSe
     // C. Resource Registry
     let resList: ResourceItem[] = INITIAL_RESOURCES;
     try {
-      const s = localStorage.getItem(RESOURCES_STORAGE_KEY);
+      const s = localStorage.getItem(hospitalScopedKey(RESOURCES_STORAGE_KEY));
       if (s) resList = JSON.parse(s);
     } catch (e) {
       console.error(e);
@@ -344,7 +367,7 @@ export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSe
   const persistSettings = (newSettings: AllHospitalSettings) => {
     setSettings(newSettings);
     try {
-      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(newSettings));
+      localStorage.setItem(hospitalScopedKey(SETTINGS_STORAGE_KEY), JSON.stringify(newSettings));
     } catch (e) {
       console.error('Failed to save settings:', e);
     }
@@ -386,7 +409,7 @@ export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSe
     setHospitalErrors({});
     setHospitalDetails(editHospitalForm);
     try {
-      localStorage.setItem(HOSPITAL_INFO_STORAGE_KEY, JSON.stringify(editHospitalForm));
+      localStorage.setItem(hospitalScopedKey(HOSPITAL_INFO_STORAGE_KEY), JSON.stringify(editHospitalForm));
     } catch (e) {
       console.error(e);
     }
@@ -494,7 +517,7 @@ export const HospitalSettingsPage: React.FC<HospitalSettingsPageProps> = ({ onSe
 
     persistSettings(defaultAll);
     try {
-      localStorage.setItem(HOSPITAL_INFO_STORAGE_KEY, JSON.stringify(DEFAULT_HOSPITAL_DETAILS));
+      localStorage.setItem(hospitalScopedKey(HOSPITAL_INFO_STORAGE_KEY), JSON.stringify(DEFAULT_HOSPITAL_DETAILS));
     } catch (e) {
       console.error(e);
     }

@@ -47,6 +47,7 @@ import {
   StatusHistoryEntry,
   MaintenanceRecord
 } from '../../data/equipmentDemoData';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 
 const STORAGE_KEY = 'medisync_equipment_telemetry_data';
 const RESOURCE_STORAGE_KEY = 'medisync_resource_registry_data';
@@ -76,7 +77,7 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
   // 1. Equipment Data State (Persistent via localStorage)
   const [equipmentList, setEquipmentList] = useState<EquipmentItem[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -91,7 +92,7 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
   const saveEquipment = (newList: EquipmentItem[]) => {
     setEquipmentList(newList);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newList));
+      localStorage.setItem(hospitalScopedKey(STORAGE_KEY), JSON.stringify(newList));
     } catch (e) {
       console.error('Failed to save equipment telemetry data to localStorage:', e);
     }
@@ -205,7 +206,7 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
     setIsRefreshing(true);
     setTimeout(() => {
       try {
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
         if (saved) {
           setEquipmentList(JSON.parse(saved));
         }
@@ -312,7 +313,7 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
 
     // Requirement 5: Update Resource Registry availability where applicable
     try {
-      const savedRes = localStorage.getItem(RESOURCE_STORAGE_KEY);
+      const savedRes = localStorage.getItem(hospitalScopedKey(RESOURCE_STORAGE_KEY));
       if (savedRes) {
         const resources = JSON.parse(savedRes);
         if (Array.isArray(resources)) {
@@ -334,7 +335,7 @@ export const EquipmentTelemetryPage: React.FC<EquipmentTelemetryPageProps> = ({ 
             return r;
           });
           if (modified) {
-            localStorage.setItem(RESOURCE_STORAGE_KEY, JSON.stringify(updatedResources));
+            localStorage.setItem(hospitalScopedKey(RESOURCE_STORAGE_KEY), JSON.stringify(updatedResources));
           }
         }
       }

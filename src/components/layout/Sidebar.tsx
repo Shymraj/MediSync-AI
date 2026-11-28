@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   LayoutDashboard, 
   Bed, 
@@ -36,16 +36,30 @@ import {
   Network
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import {
+  isMatchingHospital,
+  OPD_REQUESTS_STORAGE_KEY,
+  OPD_UPDATE_EVENT,
+  getActiveHospitalScopeId
+} from '../../utils/hospitalSync';
 import { UserRole } from '../../types';
 
 interface SidebarProps {
   currentTab: string;
   onSelectTab: (tabId: string) => void;
   activeRole?: UserRole;
+  hospitalName?: string;
+  districtName?: string;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activeRole }) => {
-  const { user, logout } = useApp();
+export const Sidebar: React.FC<SidebarProps> = ({
+  currentTab,
+  onSelectTab,
+  activeRole,
+  hospitalName,
+  districtName
+}) => {
+  const { user, logout, tempOnboarding } = useApp();
   const role: UserRole = activeRole || user?.role || 'admin';
 
   // Specific role navigation items as defined in spec
@@ -155,12 +169,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
   const patientNav = [
     { id: 'dashboard', label: 'My Care Portal', icon: <LayoutDashboard className="w-4 h-4" /> },
     { id: 'appointments', label: 'Appointments', icon: <Calendar className="w-4 h-4" /> },
-    { id: 'queue', label: 'OPD Queue Status', icon: <Clock className="w-4 h-4" /> },
+    { id: 'queue', label: 'Queue Management', icon: <Clock className="w-4 h-4" /> },
     { id: 'ai_urgency', label: 'AI- Queue Priority', icon: <Sparkles className="w-4 h-4 text-orange-500" /> },
-    { id: 'beds', label: 'Bed Availability', icon: <Bed className="w-4 h-4" /> },
+    { id: 'beds', label: 'Resources', icon: <Bed className="w-4 h-4" /> },
+    { id: 'profile', label: 'Medical History', icon: <Users className="w-4 h-4" /> },
     { id: 'requests', label: 'My Service Requests', icon: <ClipboardList className="w-4 h-4" /> },
     { id: 'hospital', label: 'Hospital Information', icon: <Building2 className="w-4 h-4" /> },
-    { id: 'profile', label: 'Patient Record', icon: <Users className="w-4 h-4" /> },
     { id: 'find_hospitals', label: 'Find Hospitals (தேடல்)', icon: <MapPin className="w-4 h-4" /> }
   ];
 
@@ -181,6 +195,43 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
   ];
 
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
+  const [pendingPortalCount, setPendingPortalCount] = useState<number>(0);
+
+  const activeHospitalId = tempOnboarding?.hospitalId || user?.hospitalId || getActiveHospitalScopeId();
+  const activeHospitalName = hospitalName || tempOnboarding?.hospitalName || user?.hospitalName || '';
+
+  useEffect(() => {
+    if (role === 'patient') {
+      setPendingPortalCount(0);
+      return;
+    }
+    const syncPendingCount = () => {
+      try {
+        const raw = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const count = parsed.filter(
+              (r: any) => r.status === 'Pending' && isMatchingHospital(r, activeHospitalId, activeHospitalName)
+            ).length;
+            setPendingPortalCount(count);
+            return;
+          }
+        }
+      } catch {}
+      setPendingPortalCount(0);
+    };
+
+    syncPendingCount();
+    window.addEventListener('storage', syncPendingCount);
+    window.addEventListener(OPD_UPDATE_EVENT, syncPendingCount);
+    const interval = setInterval(syncPendingCount, 2000);
+    return () => {
+      window.removeEventListener('storage', syncPendingCount);
+      window.removeEventListener(OPD_UPDATE_EVENT, syncPendingCount);
+      clearInterval(interval);
+    };
+  }, [role, activeHospitalId, activeHospitalName]);
 
   const toggleGroup = (groupTitle: string) => {
     setCollapsedGroups(prev => ({
@@ -202,21 +253,35 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
     window.location.hash = '#/';
   };
 
+  const isPatientRole = role === 'patient';
+
   return (
-    <aside className="w-64 bg-white border-r border-[#E2E8F0] flex flex-col shrink-0 min-h-screen">
+    <aside className={`w-64 flex flex-col shrink-0 h-screen sticky top-0 overflow-hidden ${
+      isPatientRole
+        ? 'bg-gradient-to-b from-[#FFFDFB] via-[#FFF9F4] to-[#FFEAD6] border-r border-[#F5E0CE]'
+        : 'bg-white border-r border-[#E2E8F0]'
+    }`}>
       {/* Brand */}
-      <div className="h-16 px-6 border-b border-[#E2E8F0] flex items-center gap-3">
-        <div className="w-8 h-8 rounded-lg bg-[#2563A6] flex items-center justify-center text-white">
+      <div className={`h-16 px-6 border-b flex items-center gap-3 ${
+        isPatientRole ? 'border-[#F5E0CE]' : 'border-[#E2E8F0]'
+      }`}>
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-white ${
+          isPatientRole
+            ? 'bg-gradient-to-br from-[#F97316] to-[#EA580C] shadow-xs shadow-orange-500/20'
+            : 'bg-[#2563A6]'
+        }`}>
           <Activity className="w-5 h-5 stroke-[2.5]" />
         </div>
         <div>
           <div className="text-sm font-bold text-[#1E293B]">MediSync AI</div>
-          <div className="text-[10px] text-[#64748B]">Operational Readiness</div>
+          <div className={`text-[10px] ${isPatientRole ? 'text-[#9A6B4C]' : 'text-[#64748B]'}`}>
+            {isPatientRole ? 'Better Care. Smarter Health.' : 'Operational Readiness'}
+          </div>
         </div>
       </div>
 
       {/* Navigation Links */}
-      <nav className="p-3 space-y-3 flex-1 overflow-y-auto">
+      <nav className={`flex-1 overflow-y-auto ${isPatientRole ? 'px-3.5 py-4 space-y-1.5' : 'p-3 space-y-3'}`}>
         {role === 'doctor' ? (
           // Doctor Expandable Groups Navigation
           <div className="space-y-4">
@@ -278,10 +343,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
           </div>
         ) : (
           // Standard Navigation for Admin, Nurse, Patient, Hospital
-          <div>
-            <div className="text-[10px] font-bold text-slate-400 px-3 py-1.5 uppercase tracking-wider">
-              {role} Menu
-            </div>
+          <div className={isPatientRole ? 'space-y-1.5' : 'space-y-0.5'}>
+            {!isPatientRole && (
+              <div className="text-[10px] font-bold px-3 py-1.5 uppercase tracking-wider text-slate-400">
+                {role} Menu
+              </div>
+            )}
             {navItems.map(item => {
               const isActive = 
                 currentTab === item.id ||
@@ -295,6 +362,12 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
                   key={item.id}
                   onClick={() => {
                     onSelectTab(item.id);
+                    if (role === 'patient') {
+                      if (item.id === 'find_hospitals') {
+                        window.location.hash = '#/patient-dashboard';
+                      }
+                      return;
+                    }
                     if (item.id === 'beds' || item.id === 'bed_readiness') {
                       window.location.hash = '#/hospital/beds';
                     } else if (item.id === 'wards') {
@@ -317,14 +390,34 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
                       window.location.hash = '#/hospital/overview';
                     }
                   }}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                    isActive
-                      ? 'bg-blue-50 text-[#2563A6] font-bold'
-                      : 'text-[#475569] hover:bg-[#F8FAFC] hover:text-[#1E293B]'
+                  className={`w-full flex items-center gap-3 transition-all cursor-pointer ${
+                    isPatientRole
+                      ? `px-3.5 py-2.5 rounded-2xl text-[13px] ${
+                          isActive
+                            ? 'bg-gradient-to-r from-[#FFE3CC] via-[#FFEDD8] to-[#FFF5EB] text-[#C2410C] font-bold shadow-2xs border border-[#FED7AA]/60'
+                            : 'text-[#334155] font-medium hover:bg-[#FFF4EA] hover:text-[#EA580C]'
+                        }`
+                      : `px-3 py-2 rounded-xl text-xs font-semibold ${
+                          isActive
+                            ? 'bg-blue-50 text-[#2563A6] font-bold'
+                            : 'text-[#475569] hover:bg-[#F8FAFC] hover:text-[#1E293B]'
+                        }`
                   }`}
                 >
-                  <span className={isActive ? 'text-[#2563A6]' : 'text-[#64748B]'}>{item.icon}</span>
-                  <span>{item.label}</span>
+                  <span className={
+                    isActive
+                      ? isPatientRole ? 'text-[#EA580C]' : 'text-[#2563A6]'
+                      : isPatientRole ? 'text-[#475569]' : 'text-[#64748B]'
+                  }>{item.icon}</span>
+                  <span className="truncate flex-1 text-left">{item.label}</span>
+                  {role !== 'patient' && item.id === 'patient_portal' && pendingPortalCount > 0 && (
+                    <span
+                      className="ml-auto px-2 py-0.5 rounded-full text-[10px] font-black bg-rose-600 text-white shadow-2xs animate-pulse shrink-0"
+                      title={`${pendingPortalCount} Pending Patient Portal / AI Queue Request(s)`}
+                    >
+                      {pendingPortalCount}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -332,27 +425,33 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentTab, onSelectTab, activ
         )}
       </nav>
 
-      {/* Hospital Footer & Logout in Sidebar */}
-      <div className="p-4 border-t border-[#E2E8F0] bg-slate-50/50">
+      {/* Hospital Footer & Logout in Sidebar (Anchored neatly at bottom) */}
+      <div className={`p-4 border-t shrink-0 mt-auto ${
+        isPatientRole ? 'border-[#F5E0CE] bg-gradient-to-b from-[#FFF4EB] to-[#FFE7D4]/90' : 'border-[#E2E8F0] bg-slate-50/50'
+      }`}>
         <div className="text-[10px] text-[#64748B] flex items-center gap-1 font-semibold uppercase tracking-wider">
           <ShieldCheck className="w-3.5 h-3.5 text-[#15803D]" />
-          Verified Affiliation
+          {isPatientRole ? 'Selected Hospital' : 'Verified Affiliation'}
         </div>
-        <div className="text-xs font-bold text-[#1E293B] mt-1 truncate">
-          {user?.hospitalName || 'Rajiv Gandhi GH'}
+        <div className="text-xs font-extrabold text-[#1E293B] mt-1 line-clamp-2 leading-snug" title={hospitalName || user?.hospitalName || 'Rajiv Gandhi Government General Hospital (RGGGH)'}>
+          {hospitalName || user?.hospitalName || 'Rajiv Gandhi Government General Hospital (RGGGH)'}
         </div>
-        <div className="text-[11px] text-[#64748B] mt-0.5">
-          District: {user?.districtName || 'Chennai'}
+        <div className="text-[11px] text-[#64748B] mt-0.5 font-medium">
+          District: {districtName || user?.districtName || 'Chennai'}
         </div>
 
         {/* Dedicated Sidebar Logout Button */}
-        <div className="mt-3 pt-3 border-t border-slate-200">
+        <div className={`mt-3 pt-3 border-t ${isPatientRole ? 'border-[#F5E0CE]' : 'border-slate-200'}`}>
           <button
             onClick={handleLogout}
             title="Log out of MediSync"
-            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 hover:text-red-700 transition-colors border border-red-200 cursor-pointer shadow-2xs"
+            className={`w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-colors border cursor-pointer shadow-2xs ${
+              isPatientRole
+                ? 'text-rose-700 bg-white/85 hover:bg-rose-50 border-rose-200'
+                : 'text-red-600 bg-red-50 hover:bg-red-100 hover:text-red-700 border-red-200'
+            }`}
           >
-            <LogOut className="w-3.5 h-3.5 text-red-600" />
+            <LogOut className="w-3.5 h-3.5 text-rose-600" />
             <span>Sign Out / Logout</span>
           </button>
         </div>

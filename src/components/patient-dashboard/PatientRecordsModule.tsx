@@ -593,16 +593,38 @@ const PATIENTS_DATA: PatientProfileRecord[] = [
 
 export type RecordTabType = 'overview' | 'medical_history' | 'visits' | 'prescriptions' | 'lab_reports' | 'admissions';
 
+export interface SyncedAppointmentEntry {
+  id: string;
+  tokenNumber?: string;
+  date: string;
+  timeSlot: string;
+  department: string;
+  doctorName: string;
+  purpose: string;
+  symptomsDescription?: string;
+  status: string;
+  declineReason?: string;
+  hospitalName?: string;
+}
+
 interface PatientRecordsModuleProps {
   hospitalName?: string;
   onNavigateToBooking?: () => void;
   onNavigateToQueue?: () => void;
+  livePatientName?: string;
+  livePatientAge?: string;
+  liveBloodGroup?: string;
+  liveAppointments?: SyncedAppointmentEntry[];
 }
 
 export const PatientRecordsModule: React.FC<PatientRecordsModuleProps> = ({
   hospitalName = 'Rajiv Gandhi Government General Hospital (RGGGH)',
   onNavigateToBooking,
-  onNavigateToQueue
+  onNavigateToQueue,
+  livePatientName,
+  livePatientAge,
+  liveBloodGroup,
+  liveAppointments = []
 }) => {
   // Selected Patient from directory
   const [selectedPatientId, setSelectedPatientId] = useState<string>('PID-TN-2026-8841');
@@ -622,8 +644,16 @@ export const PatientRecordsModule: React.FC<PatientRecordsModuleProps> = ({
   // Report viewer modal state
   const [selectedLabReport, setSelectedLabReport] = useState<any | null>(null);
 
-  // Active patient object
-  const currentPatient = PATIENTS_DATA.find(p => p.id === selectedPatientId) || PATIENTS_DATA[0];
+  // Active patient object (syncs live Name / Age / Blood Group if viewing primary profile)
+  const rawPatient = PATIENTS_DATA.find(p => p.id === selectedPatientId) || PATIENTS_DATA[0];
+  const currentPatient = selectedPatientId === PATIENTS_DATA[0].id
+    ? {
+        ...rawPatient,
+        name: livePatientName || rawPatient.name,
+        age: livePatientAge ? (parseInt(livePatientAge, 10) || rawPatient.age) : rawPatient.age,
+        bloodGroup: liveBloodGroup || rawPatient.bloodGroup
+      }
+    : rawPatient;
 
   // Tab definitions matching User Images 1 & 2
   const tabsList = [
@@ -1146,6 +1176,51 @@ export const PatientRecordsModule: React.FC<PatientRecordsModuleProps> = ({
               </div>
               <span className="text-xs font-bold text-[#EA580C]">{currentPatient.visitHistory.length} Consultations Recorded</span>
             </div>
+
+            {/* Synced & Booked Appointments History (Live + Past) */}
+            {liveAppointments.length > 0 && (
+              <div className="space-y-3 pb-4 border-b border-orange-100">
+                <div className="text-xs font-black uppercase tracking-wider text-[#EA580C] flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5" />
+                  <span>Submitted &amp; Attended Hospital Appointments ({liveAppointments.length})</span>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+                  {liveAppointments.map((apt) => (
+                    <div key={apt.id} className="p-4 rounded-2xl bg-[#FFF8F2] border border-orange-200/80 space-y-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-black px-2.5 py-0.5 rounded-lg bg-white text-[#EA580C] border border-orange-200">
+                          {apt.tokenNumber || apt.id}
+                        </span>
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                          apt.status === 'In Queue' || apt.status === 'Accepted' || apt.status === 'Completed'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : apt.status === 'Declined'
+                            ? 'bg-rose-100 text-rose-800'
+                            : apt.status === 'Cancelled'
+                            ? 'bg-slate-200 text-slate-700'
+                            : 'bg-amber-100 text-amber-800'
+                        }`}>
+                          {apt.status}
+                        </span>
+                      </div>
+                      <div className="font-bold text-slate-900">{apt.doctorName} &bull; {apt.department}</div>
+                      <div className="text-[11px] text-slate-600">{apt.date} &bull; {apt.timeSlot}</div>
+                      <div className="text-[11px] text-slate-700">
+                        <strong className="text-slate-500">Purpose:</strong> {apt.purpose}
+                        {apt.symptomsDescription && (
+                          <div className="mt-0.5"><strong className="text-slate-500">Symptoms:</strong> {apt.symptomsDescription}</div>
+                        )}
+                      </div>
+                      {apt.declineReason && (
+                        <div className="p-2 rounded-lg bg-rose-50 border border-rose-200 text-[11px] text-rose-800 font-semibold">
+                          Decline Reason: {apt.declineReason}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Visits Timeline */}
             <div className="space-y-4">

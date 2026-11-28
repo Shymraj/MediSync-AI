@@ -35,6 +35,7 @@ import {
   BedHistoryItem 
 } from '../../data/bedDemoData';
 import { HOSPITAL_DEMO_DATA } from '../../data/hospitalDemoData';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 
 interface BedManagementPageProps {
   onSelectTab?: (tab: string) => void;
@@ -45,7 +46,7 @@ export const BedManagementPage: React.FC<BedManagementPageProps> = ({ onSelectTa
   // Primary State: Bed Registry
   const [beds, setBeds] = useState<BedItem[]>(() => {
     try {
-      const saved = localStorage.getItem('medisync_bed_registry_data');
+      const saved = localStorage.getItem(hospitalScopedKey('medisync_bed_registry_data'));
       if (saved) return JSON.parse(saved);
     } catch {}
     return INITIAL_BEDS;
@@ -76,7 +77,7 @@ export const BedManagementPage: React.FC<BedManagementPageProps> = ({ onSelectTa
   useEffect(() => {
     const handleSync = () => {
       try {
-        const saved = localStorage.getItem('medisync_bed_registry_data');
+        const saved = localStorage.getItem(hospitalScopedKey('medisync_bed_registry_data'));
         if (saved) {
           setBeds(JSON.parse(saved));
           setLastSyncedTime('Just now');
@@ -123,7 +124,7 @@ export const BedManagementPage: React.FC<BedManagementPageProps> = ({ onSelectTa
   const saveBeds = (updatedBeds: BedItem[]) => {
     setBeds(updatedBeds);
     try {
-      localStorage.setItem('medisync_bed_registry_data', JSON.stringify(updatedBeds));
+      localStorage.setItem(hospitalScopedKey('medisync_bed_registry_data'), JSON.stringify(updatedBeds));
     } catch {}
   };
 

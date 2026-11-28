@@ -34,6 +34,7 @@ import { InteroperabilityCenter } from '../interoperability/InteroperabilityCent
 import { HospitalOverviewView } from './HospitalOverviewView';
 import { HospitalPatientPortalView } from './HospitalPatientPortalView';
 import { UserRole } from '../../types';
+import { setActiveHospitalScopeId } from '../../utils/hospitalSync';
 
 interface HospitalDashboardProps {
   initialTab?: string;
@@ -77,6 +78,10 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
     if (hash === '#/hospital/interoperability' || hash === '#/interoperability' || hash === '#/health-data-exchange') return 'interoperability';
     return 'dashboard';
   });
+
+  useEffect(() => {
+    if (initialTab) setCurrentTab(initialTab);
+  }, [initialTab]);
 
   // Sync tab with URL hash
   useEffect(() => {
@@ -169,7 +174,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
 
   // Current hospital details
   const currentHospital = {
-    id: user?.hospitalId || tempOnboarding.registrationNumber || 'hosp-chn-01',
+    id: tempOnboarding.hospitalId || user?.hospitalId || tempOnboarding.registrationNumber || 'Hos_Id-101',
     districtId: (tempOnboarding.districtId || user?.districtId || 'chennai').toLowerCase(),
     districtName: tempOnboarding.districtName || user?.districtName || 'Chennai',
     name: tempOnboarding.hospitalName || user?.hospitalName || 'Rajiv Gandhi Government General Hospital (RGGGH)',
@@ -186,6 +191,12 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
     phone: tempOnboarding.hospitalPhone || '+91 44 2530 5000',
     emergencyContact: tempOnboarding.emergencyContact || '044-25305112'
   };
+
+  useEffect(() => {
+    if (currentHospital.id) {
+      setActiveHospitalScopeId(currentHospital.id);
+    }
+  }, [currentHospital.id]);
 
   // Handle portal switching
   const handleSelectPortal = (targetRole: 'overview' | 'doctor' | 'nurse' | 'admin' | 'patient' | string) => {
@@ -496,6 +507,14 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
             window.location.hash = `#/dashboard/nurse?tab=${tab}`;
             return;
           }
+          if ((activeRole as any) === 'patient' || user?.role === 'patient') {
+            if (tab === 'find_hospitals') {
+              window.location.hash = '#/patient-dashboard';
+            } else {
+              window.location.hash = '#/dashboard/patient';
+            }
+            return;
+          }
           if (tab === 'beds') {
             window.location.hash = '#/hospital/beds';
           } else if (tab === 'wards') {
@@ -594,6 +613,8 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
                   ? 'Readiness Reports'
                   : currentTab === 'settings'
                   ? 'Hospital Settings'
+                  : currentTab === 'patient_portal'
+                  ? 'Patient Portal — Appointments'
                   : activeRole === 'overview'
                   ? 'HOSPITAL DASHBOARD'
                   : currentTab === 'dashboard' 
@@ -605,7 +626,7 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
           activeRole={activeRole}
           onNavigateHome={() => { window.location.hash = '#/'; }}
           portalSwitcher={{
-            activeRole: currentTab === 'patient_portal' ? 'patient' : activeRole,
+            activeRole: currentTab === 'patient_portal' ? 'overview' : activeRole,
             onSelectPortal: handleSelectPortal,
             isAdminUnlocked
           }}
@@ -625,8 +646,12 @@ export const HospitalDashboard: React.FC<HospitalDashboardProps> = ({ initialTab
                     Facility Active
                   </span>
                 </div>
-                <div className="text-[11px] text-emerald-100 mt-0.5">
-                  மருத்துவமனை பதிவு முடிந்தது &bull; {tempOnboarding.hospitalName || user?.hospitalName || 'Institutional Facility'} verified and active in MediSync network.
+                <div className="text-[11px] text-emerald-100 mt-0.5 flex items-center gap-2 flex-wrap">
+                  <span>மருத்துவமனை பதிவு முடிந்தது &bull; <strong>{tempOnboarding.hospitalName || user?.hospitalName || 'Institutional Facility'}</strong></span>
+                  <span className="px-2 py-0.5 rounded-md bg-white/20 text-white font-mono font-black text-[11px]">
+                    Hospital ID: {tempOnboarding.hospitalId || user?.hospitalId || sessionStorage.getItem('medisync_generated_hospital_id') || 'Hos_Id-345'}
+                  </span>
+                  <span>(Save this ID for Hospital Login &amp; Settings)</span>
                 </div>
               </div>
             </div>

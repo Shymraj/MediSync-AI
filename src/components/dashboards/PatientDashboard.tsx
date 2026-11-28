@@ -56,12 +56,20 @@ import {
   BellRing,
   Wrench,
   DoorOpen,
-  Layers
+  Layers,
+  Siren
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Hospital } from '../../types';
 import { PatientRecordsModule } from '../patient-dashboard/PatientRecordsModule';
 import { AIQueueUrgencyModule } from '../patient-dashboard/AIQueueUrgencyModule';
+import { AnimatedDoctorCharacter } from '../patient-dashboard/AnimatedDoctorCharacter';
+import {
+  isMatchingHospital,
+  OPD_REQUESTS_STORAGE_KEY,
+  OPD_UPDATE_EVENT,
+  getPatientTokenStorageKey
+} from '../../utils/hospitalSync';
 
 export interface PatientDashboardProps {
   activeTab?: string;
@@ -80,7 +88,10 @@ export interface ActiveOPDToken {
   date: string;
   timeSlot: string;
   purpose: string;
+  symptomsDescription?: string;
   patientName: string;
+  patientAge?: string;
+  bloodGroup?: string;
   patientMobile: string;
   patientAgeGender: string;
   counterNumber: string;
@@ -138,7 +149,10 @@ export type VisualBedStatus = 'available' | 'occupied' | 'cleaning' | 'dischargi
 export interface VisualBedMatrixItem {
   id: string;
   bedNumber: string;
-  ward: 'General Ward' | 'ICU' | 'Emergency Ward' | 'Private Ward' | 'Pediatrics';
+  seatNumber: string;
+  ward: 'General Ward' | 'Male Medical Ward' | 'Female Medical Ward' | 'ICU' | 'Emergency Ward' | 'Private Ward' | 'Pediatrics';
+  gender: 'Male' | 'Female' | 'Pediatric' | 'General';
+  priority: 'Critical Triage' | 'High Urgency' | 'Standard Routine';
   status: VisualBedStatus;
   patientName?: string;
   patientInitials?: string;
@@ -389,8 +403,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
   const bedsSectionRef = useRef<HTMLDivElement | null>(null);
   const recordsSectionRef = useRef<HTMLDivElement | null>(null);
 
-  // Storage key for persistent active token per hospital
-  const STORAGE_TOKEN_KEY = `medisync_patient_token_${currentHospital.id}`;
+  // Storage key for persistent active token strictly per hospital
+  const STORAGE_TOKEN_KEY = getPatientTokenStorageKey(currentHospital.id);
 
   // Internal tab state within hospital's patient portal
   const [activeSection, setActiveSection] = useState<'overview' | 'appointments' | 'queue' | 'ai_urgency' | 'beds' | 'facilities' | 'doctors' | 'emergency' | 'records'>(() => {
@@ -445,25 +459,38 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
       setActiveSection('doctors');
     } else if (activeTab === 'emergency' || activeTab === 'requests') {
       setActiveSection('emergency');
-    } else if (activeTab === 'dashboard') {
+    } else if (activeTab === 'dashboard' || activeTab === 'overview') {
       setActiveSection('overview');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   }, [activeTab]);
 
-  // Active OPD Token state (Detects if user has already applied)
+  // Active OPD Token state (Strictly scoped to currentHospital)
   const [activeToken, setActiveToken] = useState<ActiveOPDToken | null>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_TOKEN_KEY);
       if (saved) {
         const parsed = JSON.parse(saved);
-        if (parsed && parsed.tokenNumber) return parsed;
+        if (parsed && parsed.tokenNumber && isMatchingHospital(parsed, currentHospital.id, currentHospital.name)) {
+          return parsed;
+        }
+      }
+      const allRaw = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+      if (allRaw) {
+        const parsedList = JSON.parse(allRaw);
+        if (Array.isArray(parsedList)) {
+          const hospitalMatch = parsedList.find(
+            (r: any) => isMatchingHospital(r, currentHospital.id, currentHospital.name) && r.status !== 'Cancelled'
+          );
+          if (hospitalMatch) return hospitalMatch;
+        }
       }
     } catch {}
 
-    // Check if an existing appointment exists in AppContext for this hospital & user
+    // Check if an existing appointment exists in AppContext strictly for this hospital & user
     const existing = appointments.find(a => 
       (a.patientId === user?.id || a.patientName === user?.name || a.patientId === 'usr-patient-demo') &&
-      (!a.hospitalName || a.hospitalName.toLowerCase().includes(currentHospital.name.toLowerCase()) || currentHospital.name.toLowerCase().includes(a.hospitalName.toLowerCase()))
+      isMatchingHospital({ hospitalId: a.hospitalId, hospitalName: a.hospitalName }, currentHospital.id, currentHospital.name)
     );
 
     if (existing) {
@@ -524,59 +551,143 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
     tag: 'Queue Alert'
   });
 
-  // Real-time synchronization of OPD token status across portals and tabs
+  // All hospital appointment requests strictly belonging to currentHospital
+  const [patientRequestsHistory, setPatientRequestsHistory] = useState<ActiveOPDToken[]>(() => {
+    try {
+      const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((r: any) => isMatchingHospital(r, currentHospital.id, currentHospital.name));
+        }
+      }
+    } catch {}
+    return [];
+  });
+
+  // Real-time synchronization strictly between currentHospital's Patient Portal & Hospital Dashboard
   useEffect(() => {
     const handleSync = () => {
       try {
-        const saved = localStorage.getItem(STORAGE_TOKEN_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (parsed && parsed.tokenNumber) {
-            setActiveToken(parsed);
+        const allRaw = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+        const allReqs: ActiveOPDToken[] = allRaw ? JSON.parse(allRaw) : [];
+
+        if (Array.isArray(allReqs)) {
+          const hospReqs = allReqs.filter(
+            (r: any) => isMatchingHospital(r, currentHospital.id, currentHospital.name)
+          );
+          setPatientRequestsHistory(hospReqs);
+
+          const saved = localStorage.getItem(STORAGE_TOKEN_KEY);
+          if (saved) {
+            const parsed: ActiveOPDToken = JSON.parse(saved);
+            if (parsed && (parsed.requestId || parsed.tokenNumber)) {
+              const matched = hospReqs.find(
+                (r) =>
+                  (parsed.requestId && r.requestId === parsed.requestId) ||
+                  (parsed.tokenNumber && r.tokenNumber === parsed.tokenNumber)
+              );
+
+              if (matched) {
+                const statusChanged = matched.status !== parsed.status || matched.tokenNumber !== parsed.tokenNumber;
+                const merged: ActiveOPDToken = { ...parsed, ...matched };
+                setActiveToken(merged);
+
+                if (statusChanged) {
+                  localStorage.setItem(STORAGE_TOKEN_KEY, JSON.stringify(merged));
+                  if (matched.status === 'In Queue') {
+                    const acceptAlert: QueueNotificationItem = {
+                      id: `alert-acc-${Date.now()}`,
+                      type: 'info',
+                      title: '✅ Appointment Accepted by Hospital!',
+                      message: `${matched.hospitalName || currentHospital.name} approved your request. Token #${matched.tokenNumber} allocated to ${matched.doctorName} (${matched.counterNumber || 'OPD Bay'}).`,
+                      timestamp: 'Just now',
+                      read: false,
+                      tag: 'Accepted'
+                    };
+                    setLatestQueueAlert(acceptAlert);
+                    setQueueNotifications((prev) => [acceptAlert, ...prev]);
+                  } else if (matched.status === 'Declined') {
+                    const decAlert: QueueNotificationItem = {
+                      id: `alert-dec-${Date.now()}`,
+                      type: 'paused',
+                      title: '❌ Appointment Declined by Hospital',
+                      message: `Reason: ${matched.declineReason || 'Requested slot unavailable. Please select an alternate slot.'}`,
+                      timestamp: 'Just now',
+                      read: false,
+                      tag: 'Declined'
+                    };
+                    setLatestQueueAlert(decAlert);
+                    setQueueNotifications((prev) => [decAlert, ...prev]);
+                  } else if (matched.status === 'Called') {
+                    const callAlert: QueueNotificationItem = {
+                      id: `alert-call-${Date.now()}`,
+                      type: 'called',
+                      title: '📢 Your Token is Called Now!',
+                      message: `Token #${matched.tokenNumber} — Please proceed to ${matched.counterNumber || 'Consultation Room'}.`,
+                      timestamp: 'Just now',
+                      read: false,
+                      tag: 'Called Now'
+                    };
+                    setLatestQueueAlert(callAlert);
+                    setQueueNotifications((prev) => [callAlert, ...prev]);
+                  }
+                }
+              } else if (isMatchingHospital(parsed, currentHospital.id, currentHospital.name)) {
+                setActiveToken(parsed);
+              }
+            }
+          } else if (hospReqs.length > 0) {
+            const latestActive = hospReqs.find((r) => r.status !== 'Cancelled') || hospReqs[0];
+            if (latestActive) {
+              setActiveToken(latestActive);
+              localStorage.setItem(STORAGE_TOKEN_KEY, JSON.stringify(latestActive));
+            }
+          } else {
+            setActiveToken(null);
           }
-        } else {
-          setActiveToken(null);
         }
       } catch {}
     };
 
+    handleSync();
     window.addEventListener('storage', handleSync);
-    window.addEventListener('medisync_opd_update', handleSync);
+    window.addEventListener(OPD_UPDATE_EVENT, handleSync);
+    const interval = setInterval(handleSync, 2500);
     return () => {
       window.removeEventListener('storage', handleSync);
-      window.removeEventListener('medisync_opd_update', handleSync);
+      window.removeEventListener(OPD_UPDATE_EVENT, handleSync);
+      clearInterval(interval);
     };
-  }, [STORAGE_TOKEN_KEY]);
+  }, [STORAGE_TOKEN_KEY, currentHospital.id, currentHospital.name]);
 
-  const [queueNotifications, setQueueNotifications] = useState<QueueNotificationItem[]>([
-    {
-      id: 'notif-1',
-      type: 'approaching',
-      title: '🔔 Your turn is approaching',
-      message: 'Few patients remaining. Please be seated near Counter 1 / OPD Room 104.',
-      timestamp: '2 mins ago',
-      read: false,
-      tag: 'Turn Approaching'
-    },
-    {
-      id: 'notif-2',
-      type: 'info',
-      title: 'Triage & Vital Signs Cleared',
-      message: 'Blood pressure (124/82), SpO2 (99%) and temperature (98.4°F) recorded by nurse.',
-      timestamp: '8 mins ago',
-      read: true,
-      tag: 'Triage Completed'
-    },
-    {
-      id: 'notif-3',
-      type: 'info',
-      title: 'OPD Token Assigned',
-      message: 'Token #TK-VVVH-169 assigned for Dr. Arun Kumar at Counter 1 (General OPD).',
-      timestamp: '15 mins ago',
-      read: true,
-      tag: 'Booking Confirmed'
-    }
-  ]);
+  const STORAGE_NOTIFS_KEY = `medisync_patient_notifications_${currentHospital.id}`;
+  const [queueNotifications, setQueueNotifications] = useState<QueueNotificationItem[]>(() => {
+    try {
+      const saved = localStorage.getItem(`medisync_patient_notifications_${currentHospital.id}`);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch {}
+    return [
+      {
+        id: `notif-welcome-${currentHospital.id}`,
+        type: 'info',
+        title: `🏥 Connected to ${currentHospital.name}`,
+        message: `Live OPD booking approvals, decline reasons, and queue token alerts for ${currentHospital.name} appear here exclusively.`,
+        timestamp: 'Live',
+        read: false,
+        tag: 'Hospital Sync'
+      }
+    ];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_NOTIFS_KEY, JSON.stringify(queueNotifications));
+    } catch {}
+  }, [queueNotifications, STORAGE_NOTIFS_KEY]);
 
   const [notificationFilter, setNotificationFilter] = useState<'all' | 'unread'>('all');
 
@@ -584,7 +695,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
   const [showDoctorModal, setShowDoctorModal] = useState(false);
 
   // 4th Module: Bed Management States & Matrix (User Images 1, 2, & 3)
-  const [selectedWardFilter, setSelectedWardFilter] = useState<'All Wards' | 'General Ward' | 'ICU' | 'Emergency Ward' | 'Private Ward' | 'Pediatrics'>('All Wards');
+  const [selectedWardFilter, setSelectedWardFilter] = useState<'All Wards' | 'General Ward' | 'Male Medical Ward' | 'Female Medical Ward' | 'ICU' | 'Emergency Ward' | 'Private Ward' | 'Pediatrics'>('All Wards');
+  const [selectedGenderFilter, setSelectedGenderFilter] = useState<'all' | 'Male' | 'Female' | 'Pediatric' | 'General'>('all');
+  const [selectedPriorityFilter, setSelectedPriorityFilter] = useState<'all' | 'Critical Triage' | 'High Urgency' | 'Standard Routine'>('all');
   const [selectedBedStatusFilter, setSelectedBedStatusFilter] = useState<'all' | 'available' | 'occupied' | 'cleaning' | 'discharging' | 'maintenance'>('all');
   const [selectedBedForModal, setSelectedBedForModal] = useState<VisualBedMatrixItem | null>(null);
   const [hoveredBedId, setHoveredBedId] = useState<string | null>(null);
@@ -624,428 +737,533 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
   // 36 Interactive Bed Matrix Items matching user reference layout
   const [visualBedList, setVisualBedList] = useState<VisualBedMatrixItem[]>([
+    // === MALE MEDICAL WARD (8 Beds / Seats) ===
     {
-      id: 'bed-101',
-      bedNumber: 'Bed 101',
-      ward: 'General Ward',
+      id: 'bed-m-101',
+      seatNumber: 'Seat #01 (Male)',
+      bedNumber: 'Bed M-101',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'Standard Routine',
       status: 'available',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 1 (Block B - Male Wing)',
       oxygenReady: true,
-      equipment: ['Wall O2 Supply', 'Nurse Call Bell', 'IV Stand']
+      equipment: ['Wall O2 Supply', 'Nurse Call Bell', 'Standard Fowler Bed']
     },
     {
-      id: 'bed-jd-48',
-      bedNumber: 'J.D.',
-      ward: 'General Ward',
+      id: 'bed-m-102',
+      seatNumber: 'Seat #02 (Male)',
+      bedNumber: 'Bed M-102',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'Standard Routine',
       status: 'occupied',
-      patientName: 'Jane Doe',
-      patientInitials: 'J.D.',
+      patientName: 'Karthik Subramanian',
+      patientInitials: 'K.S.',
       hoursStay: '48h',
       diagnosis: 'Acute Community-Acquired Pneumonia',
       expectedDischarge: 'Today, 2:00 PM',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 1 (Block B - Male Wing)',
       oxygenReady: true,
-      equipment: ['Wall O2 (3 L/min)', 'Multipara Monitor']
+      equipment: ['Wall O2 (3 L/min)', 'Multipara Vital Monitor']
     },
     {
-      id: 'bed-as-48',
-      bedNumber: 'A.S.',
-      ward: 'General Ward',
+      id: 'bed-m-103',
+      seatNumber: 'Seat #03 (Male)',
+      bedNumber: 'Bed M-103',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'Standard Routine',
       status: 'occupied',
       patientName: 'Anand Sundaram',
       patientInitials: 'A.S.',
-      hoursStay: '48h',
-      diagnosis: 'Type 2 Diabetes with Cellulitis',
+      hoursStay: '24h',
+      diagnosis: 'Type 2 Diabetes Mellitus with Foot Cellulitis',
       expectedDischarge: 'Tomorrow, 11:00 AM',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 1 (Block B - Male Wing)',
       oxygenReady: false,
-      equipment: ['IV Infusion Pump', 'Glucose Monitor']
+      equipment: ['IV Infusion Pump', 'Digital Glucometer']
     },
     {
-      id: 'bed-jd2-48',
-      bedNumber: 'J.D.',
-      ward: 'General Ward',
+      id: 'bed-m-104',
+      seatNumber: 'Seat #04 (Male)',
+      bedNumber: 'Bed M-104',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'High Urgency',
+      status: 'available',
+      floor: 'Floor 1 (Block B - Male Wing)',
+      oxygenReady: true,
+      equipment: ['Wall O2 Supply', 'ECG Standby Unit', 'IV Pole']
+    },
+    {
+      id: 'bed-m-105',
+      seatNumber: 'Seat #05 (Male)',
+      bedNumber: 'Bed M-105',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'Standard Routine',
+      status: 'cleaning',
+      evsMinutes: '12m',
+      floor: 'Floor 1 (Block B - Male Wing)',
+      oxygenReady: true,
+      equipment: ['EVS Sanitization Protocol Active', 'UV Sterilization Completed']
+    },
+    {
+      id: 'bed-m-106',
+      seatNumber: 'Seat #06 (Male)',
+      bedNumber: 'Bed M-106',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'Standard Routine',
+      status: 'discharging',
+      patientName: 'Ramesh Krishnan',
+      patientInitials: 'R.K.',
+      hoursStay: '72h',
+      diagnosis: 'Viral Gastroenteritis - Rehydrated',
+      expectedDischarge: 'Today, 1:30 PM',
+      floor: 'Floor 1 (Block B - Male Wing)',
+      oxygenReady: false,
+      equipment: ['Discharge Medication Summary Handed']
+    },
+    {
+      id: 'bed-m-107',
+      seatNumber: 'Seat #07 (Male)',
+      bedNumber: 'Bed M-107',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'Standard Routine',
+      status: 'available',
+      floor: 'Floor 1 (Block B - Male Wing)',
+      oxygenReady: true,
+      equipment: ['Sanitized Fowler Bed', 'Wall O2 Flowmeter']
+    },
+    {
+      id: 'bed-m-108',
+      seatNumber: 'Seat #08 (Male)',
+      bedNumber: 'Bed M-108',
+      ward: 'Male Medical Ward',
+      gender: 'Male',
+      priority: 'Standard Routine',
       status: 'occupied',
-      patientName: 'John Daniel',
-      patientInitials: 'J.D.',
-      hoursStay: '48h',
-      diagnosis: 'Post-Op Appendectomy Recovery',
+      patientName: 'Selvaraj Murugan',
+      patientInitials: 'S.M.',
+      hoursStay: '36h',
+      diagnosis: 'Hypertensive Urgency Follow-up',
       expectedDischarge: '29 Nov 2026',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 1 (Block B - Male Wing)',
       oxygenReady: false,
-      equipment: ['Wound Drain Bag', 'Pain Relief Infuser']
+      equipment: ['NIBP Automated Sphygmomanometer']
     },
+
+    // === FEMALE MEDICAL WARD (8 Beds / Seats) ===
     {
-      id: 'bed-108',
-      bedNumber: 'Bed 108',
-      ward: 'General Ward',
+      id: 'bed-f-201',
+      seatNumber: 'Seat #01 (Female)',
+      bedNumber: 'Bed F-201',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'Standard Routine',
       status: 'available',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 1 (Block C - Female Wing)',
       oxygenReady: true,
-      equipment: ['Wall O2 Supply', 'Call Bell']
+      equipment: ['Wall O2 Supply', 'Patient Call Pendant', 'Sanitized Bedding']
     },
     {
-      id: 'bed-102',
-      bedNumber: 'Bed 102',
-      ward: 'General Ward',
-      status: 'available',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Wall O2 Supply', 'Emergency Defib Standby']
-    },
-    {
-      id: 'bed-104',
-      bedNumber: 'Bed 104',
-      ward: 'General Ward',
-      status: 'available',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Standard Fowler Bed', 'Wall O2']
-    },
-    {
-      id: 'bed-109',
-      bedNumber: 'Bed 108',
-      ward: 'General Ward',
-      status: 'available',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Wall O2 Supply', 'Sanitized Bedding']
-    },
-    {
-      id: 'bed-as-24',
-      bedNumber: 'A.S.',
-      ward: 'General Ward',
+      id: 'bed-f-202',
+      seatNumber: 'Seat #02 (Female)',
+      bedNumber: 'Bed F-202',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'High Urgency',
       status: 'occupied',
-      patientName: 'Arunachalam S.',
-      patientInitials: 'A.S.',
-      hoursStay: '24h',
-      diagnosis: 'Hypertensive Urgency Review',
-      expectedDischarge: 'Today, 6:00 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: false,
-      equipment: ['NIBP Monitor', 'ECG Holter']
-    },
-    {
-      id: 'bed-ja-24',
-      bedNumber: 'J.A.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Joseph Antony',
-      patientInitials: 'J.A.',
-      hoursStay: '24h',
-      diagnosis: 'Viral Gastroenteritis Dehydration',
-      expectedDischarge: 'Today, 4:00 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: false,
-      equipment: ['Saline Infusion', 'Electrolyte Infuser']
-    },
-    {
-      id: 'bed-fh-24',
-      bedNumber: 'F.H.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Fatima Hameed',
-      patientInitials: 'F.H.',
-      hoursStay: '24h',
+      patientName: 'Lakshmi Narayanan',
+      patientInitials: 'L.N.',
+      hoursStay: '48h',
       diagnosis: 'Bronchial Asthma Exacerbation',
-      expectedDischarge: 'Tomorrow, 09:30 AM',
-      floor: 'Floor 1 (Block B)',
+      expectedDischarge: 'Tomorrow, 3:00 PM',
+      floor: 'Floor 1 (Block C - Female Wing)',
       oxygenReady: true,
-      equipment: ['Nebulizer Port', 'SpO2 Sensor']
+      equipment: ['Nebulizer Port', 'Wall O2 Flowmeter (4 L/min)', 'Pulse Oximeter']
     },
     {
-      id: 'bed-as2-24',
-      bedNumber: 'A.S.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Aishwarya Saravanan',
-      patientInitials: 'A.S.',
-      hoursStay: '24h',
-      diagnosis: 'Dengue Fever with Low Platelets',
-      expectedDischarge: '30 Nov 2026',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Platelet Infusion Stand', 'Vitals Monitor']
-    },
-    {
-      id: 'bed-jr-48',
-      bedNumber: 'J.R.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'James Robert',
-      patientInitials: 'J.R.',
-      hoursStay: '48h',
-      diagnosis: 'Unstable Angina Monitoring',
-      expectedDischarge: 'Today, 5:00 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Cardiac Telemetry Unit', 'Wall O2']
-    },
-    {
-      id: 'bed-08',
-      bedNumber: 'Bed 08',
-      ward: 'General Ward',
-      status: 'cleaning',
-      evsMinutes: '15m',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['EVS Sanitization Protocol Active', 'UV Sterilization Pending']
-    },
-    {
-      id: 'bed-115',
-      bedNumber: 'Bed 115',
-      ward: 'General Ward',
+      id: 'bed-f-203',
+      seatNumber: 'Seat #03 (Female)',
+      bedNumber: 'Bed F-203',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'Standard Routine',
       status: 'available',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 1 (Block C - Female Wing)',
       oxygenReady: true,
-      equipment: ['Ready for Intake', 'Wall O2', 'Nurse Call']
+      equipment: ['Wall O2 Port', 'IV Drip Stand', 'Wheelchair Bay Accessible']
     },
     {
-      id: 'bed-jd3-24',
-      bedNumber: 'J.D.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Jayakumar D.',
-      patientInitials: 'J.D.',
-      hoursStay: '24h',
-      diagnosis: 'Acute Pyelonephritis',
-      expectedDischarge: 'Tomorrow, 12:00 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: false,
-      equipment: ['IV Antibiotic Pump']
-    },
-    {
-      id: 'bed-md-24',
-      bedNumber: 'M.D.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Mohamed Dawood',
-      patientInitials: 'M.D.',
-      hoursStay: '24h',
-      diagnosis: 'Deep Vein Thrombosis Heparinization',
-      expectedDischarge: '01 Dec 2026',
-      floor: 'Floor 1 (Block B)',
+      id: 'bed-f-204',
+      seatNumber: 'Seat #04 (Female)',
+      bedNumber: 'Bed F-204',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'Standard Routine',
+      status: 'cleaning',
+      evsMinutes: '8m',
+      floor: 'Floor 1 (Block C - Female Wing)',
       oxygenReady: true,
-      equipment: ['Pneumatic Compression Boots', 'Infusion Pump']
+      equipment: ['EVS Sanitization Protocol Active', 'Linen Change Completed']
     },
     {
-      id: 'bed-25',
-      bedNumber: 'Bed 25',
-      ward: 'General Ward',
+      id: 'bed-f-205',
+      seatNumber: 'Seat #05 (Female)',
+      bedNumber: 'Bed F-205',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'Standard Routine',
       status: 'discharging',
-      patientName: 'Rajesh Manickam',
-      diagnosis: 'Recovered Dengue Fever',
-      expectedDischarge: 'Within 1 hour',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      notes: 'Doctor discharge summary signed. Discharge billing in progress.',
-      equipment: ['Bed liberating shortly for incoming emergency']
+      patientName: 'Meenakshi Sundari',
+      patientInitials: 'M.S.',
+      hoursStay: '60h',
+      diagnosis: 'Severe Urinary Tract Infection (UTI) - Resolved',
+      expectedDischarge: 'Today, 2:30 PM',
+      floor: 'Floor 1 (Block C - Female Wing)',
+      oxygenReady: false,
+      equipment: ['Oral Antibiotic Transition Completed']
     },
     {
-      id: 'bed-as3-24',
-      bedNumber: 'A.S.',
-      ward: 'General Ward',
+      id: 'bed-f-206',
+      seatNumber: 'Seat #06 (Female)',
+      bedNumber: 'Bed F-206',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'Standard Routine',
       status: 'occupied',
-      patientName: 'Amudha Selvan',
-      patientInitials: 'A.S.',
-      hoursStay: '24h',
+      patientName: 'Priya Govindaraj',
+      patientInitials: 'P.G.',
+      hoursStay: '18h',
       diagnosis: 'Severe Migraine with Dehydration',
-      expectedDischarge: 'Today, 3:30 PM',
-      floor: 'Floor 1 (Block B)',
+      expectedDischarge: 'Today, 6:00 PM',
+      floor: 'Floor 1 (Block C - Female Wing)',
       oxygenReady: false,
-      equipment: ['IV Stand']
+      equipment: ['IV Normal Saline Infusion', 'Quiet Bay Protocol']
     },
     {
-      id: 'bed-84',
-      bedNumber: 'Bed 84',
-      ward: 'General Ward',
+      id: 'bed-f-207',
+      seatNumber: 'Seat #07 (Female)',
+      bedNumber: 'Bed F-207',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'High Urgency',
+      status: 'available',
+      floor: 'Floor 1 (Block C - Female Wing)',
+      oxygenReady: true,
+      equipment: ['Wall O2 Supply', 'Vital Signs Spot Monitor']
+    },
+    {
+      id: 'bed-f-208',
+      seatNumber: 'Seat #08 (Female)',
+      bedNumber: 'Bed F-208',
+      ward: 'Female Medical Ward',
+      gender: 'Female',
+      priority: 'Standard Routine',
+      status: 'occupied',
+      patientName: 'Revathi Chandran',
+      patientInitials: 'R.C.',
+      hoursStay: '42h',
+      diagnosis: 'Post-Cholecystectomy Observation',
+      expectedDischarge: '30 Nov 2026',
+      floor: 'Floor 1 (Block C - Female Wing)',
+      oxygenReady: false,
+      equipment: ['Surgical Wound Dressing', 'Pain Management Pump']
+    },
+
+    // === ICU / CRITICAL CARE (6 Beds / Seats) ===
+    {
+      id: 'bed-icu-01',
+      seatNumber: 'ICU Bay #01',
+      bedNumber: 'ICU-B01',
+      ward: 'ICU',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'available',
+      floor: 'Floor 2 (Critical Care Complex)',
+      oxygenReady: true,
+      equipment: ['Advanced Invasive Mechanical Ventilator', 'Multi-channel Syringe Pumps (4x)', 'Wall Medical Air & O2', 'Crash Cart Proximity']
+    },
+    {
+      id: 'bed-icu-02',
+      seatNumber: 'ICU Bay #02',
+      bedNumber: 'ICU-B02',
+      ward: 'ICU',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'occupied',
+      patientName: 'Balasubramaniam V.',
+      patientInitials: 'B.V.',
+      hoursStay: '96h',
+      diagnosis: 'Acute Coronary Syndrome (ACS) with Cardiogenic Shock',
+      expectedDischarge: 'Step-Down in 48h',
+      floor: 'Floor 2 (Critical Care Complex)',
+      oxygenReady: true,
+      equipment: ['Ventilator (BiPAP Mode)', 'Continuous Arterial Line Monitor', 'Vasopressor Infusion']
+    },
+    {
+      id: 'bed-icu-03',
+      seatNumber: 'ICU Bay #03',
+      bedNumber: 'ICU-B03',
+      ward: 'ICU',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'occupied',
+      patientName: 'Devika Natarajan',
+      patientInitials: 'D.N.',
+      hoursStay: '72h',
+      diagnosis: 'Severe Sepsis secondary to Pneumonia',
+      expectedDischarge: 'Under Critical Surveillance',
+      floor: 'Floor 2 (Critical Care Complex)',
+      oxygenReady: true,
+      equipment: ['Mechanical Ventilator', 'Central Venous Pressure (CVP) Line', 'Continuous Hemofiltration Ready']
+    },
+    {
+      id: 'bed-icu-04',
+      seatNumber: 'ICU Bay #04',
+      bedNumber: 'ICU-B04',
+      ward: 'ICU',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'available',
+      floor: 'Floor 2 (Critical Care Complex)',
+      oxygenReady: true,
+      equipment: ['Mechanical Ventilator (Standby)', 'Multipara Cardiac Monitor', 'High-Flow Nasal Cannula (HFNC)']
+    },
+    {
+      id: 'bed-icu-05',
+      seatNumber: 'ICU Bay #05',
+      bedNumber: 'ICU-B05',
+      ward: 'ICU',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'cleaning',
+      evsMinutes: '20m',
+      floor: 'Floor 2 (Critical Care Complex)',
+      oxygenReady: true,
+      equipment: ['Deep Clean Biomedical Terminal Disinfection in Progress']
+    },
+    {
+      id: 'bed-icu-06',
+      seatNumber: 'ICU Bay #06',
+      bedNumber: 'ICU-B06',
+      ward: 'ICU',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'maintenance',
+      floor: 'Floor 2 (Critical Care Complex)',
+      oxygenReady: false,
+      notes: 'Central pipeline medical gas valve calibration scheduled today',
+      equipment: ['Bio-Med Calibration Tagged - ETA 2h']
+    },
+
+    // === EMERGENCY & TRAUMA BAY (6 Beds / Seats) ===
+    {
+      id: 'bed-emg-01',
+      seatNumber: 'Trauma Bay #01',
+      bedNumber: 'EMG-T01',
+      ward: 'Emergency Ward',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'available',
+      floor: 'Ground Floor (Casualty Resuscitation)',
+      oxygenReady: true,
+      equipment: ['Crash Cart with Defibrillator', 'High-Flow Wall O2', 'Trauma Stretcher with CPR Board']
+    },
+    {
+      id: 'bed-emg-02',
+      seatNumber: 'Trauma Bay #02',
+      bedNumber: 'EMG-T02',
+      ward: 'Emergency Ward',
+      gender: 'General',
+      priority: 'Critical Triage',
+      status: 'occupied',
+      patientName: 'Saravanan Muthu',
+      patientInitials: 'S.M.',
+      hoursStay: '4h',
+      diagnosis: 'Road Traffic Accident (RTA) - Polytrauma Stabilization',
+      expectedDischarge: 'Transfer to Ortho OT',
+      floor: 'Ground Floor (Casualty Resuscitation)',
+      oxygenReady: true,
+      equipment: ['Full Trauma Multi-Monitor', 'Rapid Blood Infuser', 'Cervical Collar Immobilizer']
+    },
+    {
+      id: 'bed-emg-03',
+      seatNumber: 'Emergency Seat #03',
+      bedNumber: 'EMG-S03',
+      ward: 'Emergency Ward',
+      gender: 'General',
+      priority: 'High Urgency',
+      status: 'available',
+      floor: 'Ground Floor (Triage Observation)',
+      oxygenReady: true,
+      equipment: ['Oxygen Mask Ports', 'Mobile ECG Unit Standby', 'Suction Apparatus']
+    },
+    {
+      id: 'bed-emg-04',
+      seatNumber: 'Emergency Seat #04',
+      bedNumber: 'EMG-S04',
+      ward: 'Emergency Ward',
+      gender: 'General',
+      priority: 'High Urgency',
+      status: 'occupied',
+      patientName: 'Kavitha Ramachandran',
+      patientInitials: 'K.R.',
+      hoursStay: '6h',
+      diagnosis: 'Acute Renal Colic with Hematuria',
+      expectedDischarge: 'Transfer to Ward',
+      floor: 'Ground Floor (Triage Observation)',
+      oxygenReady: false,
+      equipment: ['Ultrasound Point-of-Care Handheld', 'IV Analgesic Infusion']
+    },
+    {
+      id: 'bed-emg-05',
+      seatNumber: 'Emergency Seat #05',
+      bedNumber: 'EMG-S05',
+      ward: 'Emergency Ward',
+      gender: 'General',
+      priority: 'High Urgency',
+      status: 'available',
+      floor: 'Ground Floor (Triage Observation)',
+      oxygenReady: true,
+      equipment: ['Triage Observation Recliner Bed', 'Wall O2 Flowmeter']
+    },
+    {
+      id: 'bed-emg-06',
+      seatNumber: 'Emergency Seat #06',
+      bedNumber: 'EMG-S06',
+      ward: 'Emergency Ward',
+      gender: 'General',
+      priority: 'High Urgency',
+      status: 'discharging',
+      patientName: 'Dinesh Kumar',
+      patientInitials: 'D.K.',
+      hoursStay: '5h',
+      diagnosis: 'Acute Food Allergy with Urticaria - Treated with Epinephrine',
+      expectedDischarge: 'Within 30 mins',
+      floor: 'Ground Floor (Triage Observation)',
+      oxygenReady: false,
+      equipment: ['Allergy Discharge Counseling Complete']
+    },
+
+    // === PEDIATRICS & MATERNITY (4 Beds / Cots) ===
+    {
+      id: 'bed-ped-01',
+      seatNumber: 'Pedia Cot #01',
+      bedNumber: 'PED-C01',
+      ward: 'Pediatrics',
+      gender: 'Pediatric',
+      priority: 'High Urgency',
+      status: 'available',
+      floor: 'Floor 2 (Mother & Child Center)',
+      oxygenReady: true,
+      equipment: ['Pediatric Fowler Cot with Safety Rails', 'Pediatric Pulse Oximeter Probe', 'Wall O2 Flowmeter']
+    },
+    {
+      id: 'bed-ped-02',
+      seatNumber: 'Pedia Cot #02',
+      bedNumber: 'PED-C02',
+      ward: 'Pediatrics',
+      gender: 'Pediatric',
+      priority: 'High Urgency',
+      status: 'occupied',
+      patientName: 'Master Aarav (Age 4)',
+      patientInitials: 'A.K.',
+      hoursStay: '24h',
+      diagnosis: 'Acute Bronchiolitis with Mild Hypoxia',
+      expectedDischarge: 'Tomorrow, 10:00 AM',
+      floor: 'Floor 2 (Mother & Child Center)',
+      oxygenReady: true,
+      equipment: ['Pediatric O2 Hood (30% FiO2)', 'Syringe Micro-Infusion Pump']
+    },
+    {
+      id: 'bed-ped-03',
+      seatNumber: 'Pedia Cot #03',
+      bedNumber: 'PED-C03',
+      ward: 'Pediatrics',
+      gender: 'Pediatric',
+      priority: 'Standard Routine',
+      status: 'available',
+      floor: 'Floor 2 (Mother & Child Center)',
+      oxygenReady: true,
+      equipment: ['Pediatric Cot with Warmth Lamp Standby', 'Mother Attendant Bed Adjacent']
+    },
+    {
+      id: 'bed-ped-04',
+      seatNumber: 'Pedia Cot #04',
+      bedNumber: 'PED-C04',
+      ward: 'Pediatrics',
+      gender: 'Pediatric',
+      priority: 'Standard Routine',
       status: 'cleaning',
       evsMinutes: '15m',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 2 (Mother & Child Center)',
       oxygenReady: true,
-      equipment: ['Hospital Grade Sanitization', 'Fresh Linen Being Dressed']
+      equipment: ['Toy Sanitization & Hypoallergenic Cot Linen Change']
     },
+
+    // === PRIVATE DELUXE WARD (4 Suites / Beds) ===
     {
-      id: 'bed-112',
-      bedNumber: 'Bed 112',
-      ward: 'General Ward',
+      id: 'bed-prv-101',
+      seatNumber: 'Private Suite #101',
+      bedNumber: 'PRV-S101',
+      ward: 'Private Ward',
+      gender: 'General',
+      priority: 'Standard Routine',
       status: 'available',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 3 (Executive Healthcare Wing)',
       oxygenReady: true,
-      equipment: ['Disinfected & Certified Ready']
+      equipment: ['Electronic Hill-Rom 5-Function Bed', 'Private Attendant Sofa-Bed', 'Ensuite Restroom', 'Wall O2 Pipeline']
     },
     {
-      id: 'bed-66',
-      bedNumber: 'Bed 66',
-      ward: 'General Ward',
-      status: 'available',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Full Fowler Bed Ready']
-    },
-    {
-      id: 'bed-do-24',
-      bedNumber: 'D.O.',
-      ward: 'General Ward',
+      id: 'bed-prv-102',
+      seatNumber: 'Private Suite #102',
+      bedNumber: 'PRV-S102',
+      ward: 'Private Ward',
+      gender: 'General',
+      priority: 'Standard Routine',
       status: 'occupied',
-      patientName: 'David O\'Connor',
-      patientInitials: 'D.O.',
-      hoursStay: '24h',
-      diagnosis: 'Acute Food Poisoning & Hypokalemia',
-      expectedDischarge: 'Today, 7:00 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: false,
-      equipment: ['Electrolyte Monitor']
-    },
-    {
-      id: 'bed-78-48',
-      bedNumber: 'Bed 78',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Murugesan K.',
+      patientName: 'Venkataraman S.',
+      patientInitials: 'V.S.',
       hoursStay: '48h',
-      diagnosis: 'Chronic Bronchitis Flare-up',
-      expectedDischarge: 'Tomorrow, 10:00 AM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Wall O2 (2 L/min)', 'Incentive Spirometer']
-    },
-    {
-      id: 'bed-jd4-24',
-      bedNumber: 'J.D.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Jeevan Das',
-      patientInitials: 'J.D.',
-      hoursStay: '24h',
-      diagnosis: 'Fracture Left Tibia Post-POP Care',
-      expectedDischarge: '29 Nov 2026',
-      floor: 'Floor 1 (Block B)',
+      diagnosis: 'Post-Elective Total Knee Replacement (TKR)',
+      expectedDischarge: '30 Nov 2026',
+      floor: 'Floor 3 (Executive Healthcare Wing)',
       oxygenReady: false,
-      equipment: ['Traction Frame', 'Pain Management Pump']
+      equipment: ['Continuous Passive Motion (CPM) Machine', 'Cryotherapy Ice Pack Unit']
     },
     {
-      id: 'bed-114',
-      bedNumber: 'Bed 114',
-      ward: 'General Ward',
+      id: 'bed-prv-103',
+      seatNumber: 'Private Suite #103',
+      bedNumber: 'PRV-S103',
+      ward: 'Private Ward',
+      gender: 'General',
+      priority: 'Standard Routine',
       status: 'available',
-      floor: 'Floor 1 (Block B)',
+      floor: 'Floor 3 (Executive Healthcare Wing)',
       oxygenReady: true,
-      equipment: ['Wall O2 Supply', 'Suction Line Active']
+      equipment: ['High-Comfort Fowler Bed', 'Attendant Lounge', 'Wall O2 & Medical Air']
     },
     {
-      id: 'bed-36-24',
-      bedNumber: 'Bed 36',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Kavitha R.',
-      hoursStay: '24h',
-      diagnosis: 'Cholecystectomy Post-Op Day 1',
-      expectedDischarge: 'Today, 8:00 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: false,
-      equipment: ['Vital Monitor', 'Abdominal Binder']
-    },
-    {
-      id: 'bed-37-24',
-      bedNumber: 'Bed 37',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Suresh Babu',
-      hoursStay: '24h',
-      diagnosis: 'Mild Stroke TIA Stabilization',
-      expectedDischarge: 'Tomorrow, 02:00 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Neuro-Vitals Monitor', 'O2 Mask']
-    },
-    {
-      id: 'bed-90',
-      bedNumber: 'Bed 90',
-      ward: 'General Ward',
-      status: 'cleaning',
-      evsMinutes: '08m',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['EVS Sanitization Ending in 8m']
-    },
-    {
-      id: 'bed-as4-24',
-      bedNumber: 'A.S.',
-      ward: 'General Ward',
-      status: 'occupied',
-      patientName: 'Antony Samy',
-      patientInitials: 'A.S.',
-      hoursStay: '24h',
-      diagnosis: 'Acute Gout Arthritis Flare',
-      expectedDischarge: 'Today, 6:30 PM',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: false,
-      equipment: ['Analgesic Infusion']
-    },
-    {
-      id: 'bed-92',
-      bedNumber: 'Bed 92',
-      ward: 'General Ward',
-      status: 'cleaning',
-      evsMinutes: '08m',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Mattress Disinfection Ready']
-    },
-    {
-      id: 'bed-93',
-      bedNumber: 'Bed 93',
-      ward: 'General Ward',
-      status: 'cleaning',
-      evsMinutes: '08m',
-      floor: 'Floor 1 (Block B)',
-      oxygenReady: true,
-      equipment: ['Terminal Cleaning 8m Remaining']
-    },
-    {
-      id: 'bed-52',
-      bedNumber: 'Bed 52',
-      ward: 'ICU',
+      id: 'bed-prv-104',
+      seatNumber: 'Private Suite #104',
+      bedNumber: 'PRV-S104',
+      ward: 'Private Ward',
+      gender: 'General',
+      priority: 'Standard Routine',
       status: 'discharging',
-      patientName: 'Venkatesan T.',
-      diagnosis: 'Post-CABG Heart Surgery Step Down',
-      expectedDischarge: 'Step Down to Ward in 2h',
-      floor: 'Floor 2 (ICU Wing)',
-      oxygenReady: true,
-      equipment: ['Transfer to General Ward In Progress']
-    },
-    {
-      id: 'bed-71',
-      bedNumber: 'Bed 71',
-      ward: 'Emergency Ward',
-      status: 'discharging',
-      patientName: 'Praveen Kumar',
-      diagnosis: 'Road Accident Observation - Normal CT',
-      expectedDischarge: 'Discharge in 45m',
-      floor: 'Ground Floor',
-      oxygenReady: true,
-      equipment: ['Ready for Home Discharge']
-    },
-    {
-      id: 'bed-116',
-      bedNumber: 'Bed 116',
-      ward: 'General Ward',
-      status: 'maintenance',
-      floor: 'Floor 1 (Block B)',
+      patientName: 'Gayathri Krishnan',
+      patientInitials: 'G.K.',
+      hoursStay: '36h',
+      diagnosis: 'Diagnostic Cardiac Catheterization - Cleared',
+      expectedDischarge: 'Today, 4:00 PM',
+      floor: 'Floor 3 (Executive Healthcare Wing)',
       oxygenReady: false,
-      notes: 'Motorized backrest hydraulic repair & electrical calibration',
-      equipment: ['Biomedical Engineering Tagged']
-    },
-    {
-      id: 'bed-120',
-      bedNumber: 'Bed 120',
-      ward: 'ICU',
-      status: 'maintenance',
-      floor: 'Floor 2 (ICU Wing)',
-      oxygenReady: false,
-      notes: 'Central pipeline O2 flowmeter nozzle replacement in progress',
-      equipment: ['Maintenance Underway - Ready in 2h']
+      equipment: ['Discharge Billing in Progress']
     }
   ]);
 
@@ -1117,13 +1335,16 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
     ];
   });
 
-  // Booking Form Fields
+  // Booking Form Fields (Name, Age, Blood Group + Date, Time Slot, Purpose, Symptoms Description)
   const [department, setDepartment] = useState('Cardiology OPD');
   const [doctorName, setDoctorName] = useState('Dr. Arun Kumar');
   const [date, setDate] = useState('2026-11-28');
   const [timeSlot, setTimeSlot] = useState('10:30 AM - 12:00 PM');
   const [purpose, setPurpose] = useState('Routine consultation & general health check');
+  const [symptomsDescription, setSymptomsDescription] = useState('');
   const [patientName, setPatientName] = useState(user?.name || 'Muralitharan');
+  const [patientAge, setPatientAge] = useState('28');
+  const [bloodGroup, setBloodGroup] = useState('O+');
   const [patientMobile, setPatientMobile] = useState('+91 98401 22345');
   const [patientAgeGender, setPatientAgeGender] = useState('28 / Male');
 
@@ -1219,14 +1440,16 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
     // 1. Call context bookAppointment
     bookAppointment(department, doctorName, date, timeSlot);
 
-    // 2. Generate clean token number (e.g. TK-VVVH-169) & Request ID (e.g. REQ-VVVH-284)
+    // 2. Generate Request ID ONLY (Official Patient Token e.g. MMC_PAT_01 is generated ONLY when Hospital approves!)
     const hospAbbr = (currentHospital.name.replace(/[^A-Za-z]/g, '').slice(0, 4) || 'HOSP').toUpperCase();
-    const tokenRand = Math.floor(100 + Math.random() * 899);
-    const generatedTokenNumber = `TK-${hospAbbr}-${tokenRand}`;
+    const generatedTokenNumber = 'AWAITING-APPROVAL';
     const reqRand = Math.floor(1000 + Math.random() * 9000);
     const generatedRequestId = `REQ-${hospAbbr}-${reqRand}`;
 
     // 3. Construct Request Object with status 'Pending' (Sent directly to current hospital)
+    const computedAgeGender = `${patientAge.trim() || '28'} Yrs • ${bloodGroup}`;
+    setPatientAgeGender(computedAgeGender);
+
     const newRequest: ActiveOPDToken = {
       tokenNumber: generatedTokenNumber,
       requestId: generatedRequestId,
@@ -1237,13 +1460,16 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
       date,
       timeSlot,
       purpose: purpose.trim() || 'General Medical Consultation',
+      symptomsDescription: symptomsDescription.trim() || purpose.trim() || 'General symptoms evaluation',
       patientName: patientName.trim() || user?.name || 'Muralitharan',
+      patientAge: patientAge.trim() || '28',
+      bloodGroup,
       patientMobile: patientMobile.trim() || '+91 98401 22345',
-      patientAgeGender: patientAgeGender.trim() || '28 / Male',
+      patientAgeGender: computedAgeGender,
       counterNumber: department.includes('Cardio') ? 'Counter 2 (OPD Bay A)' : department.includes('Pulmo') ? 'Counter 3 (OPD Bay B)' : 'Counter 1 (General OPD)',
-      queuePosition: 3,
-      currentServingToken: `C-021`,
-      estimatedWaitMinutes: 14,
+      queuePosition: 5,
+      currentServingToken: `A19`,
+      estimatedWaitMinutes: 25,
       status: 'Pending',
       bookedAt: new Date().toISOString()
     };
@@ -1251,16 +1477,33 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
     // 4. Save to localStorage & state
     try {
       localStorage.setItem(STORAGE_TOKEN_KEY, JSON.stringify(newRequest));
-      // Register into global hospital OPD requests registry so Hospital Dashboard sees it
-      const stored = localStorage.getItem('medisync_hospital_opd_requests');
+      // Register directly under currentHospital so ONLY this hospital's Hospital Dashboard sees it
+      const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
       const existingList = stored ? JSON.parse(stored) : [];
-      const updatedList = [newRequest, ...existingList.filter((item: any) => item.tokenNumber !== newRequest.tokenNumber && item.requestId !== newRequest.requestId)];
-      localStorage.setItem('medisync_hospital_opd_requests', JSON.stringify(updatedList));
-      window.dispatchEvent(new CustomEvent('medisync_opd_update'));
+      const updatedList = [
+        newRequest,
+        ...existingList.filter(
+          (item: any) =>
+            !(
+              isMatchingHospital(item, currentHospital.id, currentHospital.name) &&
+              (item.tokenNumber === newRequest.tokenNumber || item.requestId === newRequest.requestId)
+            )
+        )
+      ];
+      localStorage.setItem(OPD_REQUESTS_STORAGE_KEY, JSON.stringify(updatedList));
+      window.dispatchEvent(new Event('storage'));
+      window.dispatchEvent(new CustomEvent(OPD_UPDATE_EVENT));
     } catch {}
 
     setActiveToken(newRequest);
+    setPatientRequestsHistory((prev) => [newRequest, ...prev.filter((r) => r.requestId !== newRequest.requestId)]);
     setShowBookingCelebration(false);
+    triggerQueueNotification(
+      'info',
+      '📨 Appointment Request Sent to Hospital',
+      `Your request for ${doctorName} (${date}, ${timeSlot}) was submitted to ${currentHospital.name}. You will be notified once accepted or reviewed.`,
+      'Request Pending'
+    );
 
     // Stay right on the APPOINTMENTS page so application form goes away and "My Appointments" appears!
     setActiveSection('appointments');
@@ -1670,7 +1913,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
             <div className="absolute right-0 top-0 bottom-0 w-2/3 pointer-events-none overflow-hidden select-none -z-0">
               <div className="absolute -right-20 -top-20 w-[500px] h-[500px] rounded-full border-[45px] border-orange-200/30" />
               <div className="absolute -right-8 -top-8 w-[420px] h-[420px] rounded-full border-[35px] border-orange-300/25" />
-              <div className="absolute 4 4 w-[340px] h-[340px] rounded-full border-[25px] border-amber-200/20" />
+              <div className="absolute right-4 top-4 w-[340px] h-[340px] rounded-full border-[25px] border-amber-200/20" />
             </div>
 
             {/* Left Side: Welcome Text & In-Banner Search */}
@@ -1764,15 +2007,8 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                   <div className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-3 h-3 bg-white border-r border-b border-orange-200/90 rotate-45" />
                 </div>
 
-                {/* Crystal-Clear 3D Animated Doctor Character */}
-                <picture>
-                  <source type="image/webp" srcSet="/doctor-thumbs-up.webp" />
-                  <img 
-                    src="/doctor-thumbs-up.gif" 
-                    alt="Dr. Friendly - MediSync AI Care Guide" 
-                    className="h-56 sm:h-64 md:h-76 lg:h-84 w-auto object-contain select-none drop-shadow-xl"
-                  />
-                </picture>
+                {/* Crystal-Clear Live Animated 3D Doctor Character (Eyes Blink/Move + Raising Thumbs-Up Hand) */}
+                <AnimatedDoctorCharacter className="h-56 sm:h-64 md:h-76 lg:h-84" />
 
                 {/* Interactive Live Floating Badge */}
                 <div className="absolute top-6 sm:top-8 -right-1 sm:right-2 bg-white/95 backdrop-blur-md px-2.5 py-1 rounded-full shadow-md border border-orange-200 flex items-center gap-1.5 text-[10px] font-extrabold text-[#EA580C] select-none shadow-orange-500/10">
@@ -1787,10 +2023,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
           {/* 
             ============================================================
-            2. SUB-PORTAL SECTION TABS
+            2. SUB-PORTAL SECTION TABS (6 Core Modules)
             ============================================================
           */}
-          <div className="bg-white p-1.5 rounded-2xl border border-orange-100 shadow-2xs flex items-center gap-1.5 overflow-x-auto">
+          <div className="bg-white p-2 rounded-2xl border border-orange-100 shadow-2xs flex items-center gap-2 overflow-x-auto">
             
             {/* 1. Dashboard Overview */}
             <button
@@ -1798,218 +2034,195 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                 setActiveSection('overview');
                 onSelectTab?.('dashboard');
               }}
-              className="flex-1 min-w-[150px] py-2.5 px-4 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-center gap-2 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white shadow-md shadow-orange-500/20 font-black"
+              className="flex-1 min-w-[155px] py-2.5 px-4 rounded-xl text-xs transition-all cursor-pointer flex items-center justify-center gap-2 bg-gradient-to-r from-[#F97316] to-[#EA580C] text-white shadow-md shadow-orange-500/20 font-black"
             >
               <Activity className="w-3.5 h-3.5" />
               <span>Dashboard Overview</span>
             </button>
 
-            {/* 2. Appointments / Book OPD */}
+            {/* 2. Appointments */}
             <button
               onClick={handleGoToAppointments}
-              className="flex-1 min-w-[170px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
+              className="flex-1 min-w-[155px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
             >
-              <Calendar className="w-3.5 h-3.5 text-orange-500" />
-              <span>
-                {activeToken ? `My Appointments (${activeToken.tokenNumber})` : 'My Appointments'}
-              </span>
-              {activeToken && <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />}
+              <Calendar className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span>Appointments</span>
+              {activeToken && <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />}
             </button>
 
-            {/* 3. OPD Queue Status */}
+            {/* 3. Queue Management */}
             <button
               onClick={handleGoToQueue}
-              className="flex-1 min-w-[150px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
+              className="flex-1 min-w-[165px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
             >
               <Clock className="w-3.5 h-3.5 text-amber-500" />
-              <span>OPD Queue Status</span>
+              <span>Queue Management</span>
             </button>
 
-            {/* 4. AI Queue Urgency (User-requested 4th module) */}
+            {/* 4. AI- Queue Priority */}
             <button
               onClick={() => {
                 setActiveSection('ai_urgency');
                 onSelectTab?.('ai_urgency');
               }}
-              className={`flex-1 min-w-[175px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 ${
-                false
-                  ? 'bg-gradient-to-r from-orange-500 to-amber-500 text-white shadow-md shadow-orange-500/20 font-black'
-                  : 'text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]'
-              }`}
+              className="flex-1 min-w-[175px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-500 animate-pulse" />
-              <span>AI Queue Urgency</span>
+              <span>AI- Queue Priority</span>
               <span className="px-1.5 py-0.5 rounded-md text-[9px] font-black uppercase bg-orange-100 text-orange-800 border border-orange-200">
-                AI Triage
+                AI
               </span>
             </button>
 
-            {/* 5. Bed Management */}
+            {/* 5. Resources (Beds & Equipments) */}
             <button
               onClick={handleGoToBeds}
-              className="flex-1 min-w-[160px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
+              className="flex-1 min-w-[140px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
             >
-              <Bed className="w-3.5 h-3.5 text-blue-500" />
-              <span>Bed Management</span>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-50 text-emerald-700 border border-emerald-200">
-                78 Ready
-              </span>
+              <Bed className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span>Resources</span>
             </button>
 
-            {/* 5. Equipment Availability */}
-            <button
-              onClick={() => {
-                setActiveSection('beds');
-                setResourceSubTab('equipment');
-                onSelectTab?.('equipment');
-              }}
-              className="flex-1 min-w-[170px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
-            >
-              <Activity className="w-3.5 h-3.5 text-purple-500" />
-              <span>Equipment Availability</span>
-            </button>
-
-            {/* 6. Patient Medical Record (User Images 1 & 2 Request) */}
+            {/* 6. Medical History */}
             <button
               onClick={() => {
                 setActiveSection('records');
                 onSelectTab?.('profile');
               }}
-              className="flex-1 min-w-[170px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
+              className="flex-1 min-w-[155px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
             >
-              <FileText className="w-3.5 h-3.5 text-blue-500" />
-              <span>Patient Record (மருத்துவம்)</span>
+              <FileText className="w-3.5 h-3.5 text-[#EA580C]" />
+              <span>Medical History</span>
             </button>
-
-            {/* 6. Diagnostics & Lab */}
-            <button
-              onClick={() => {
-                setActiveSection('facilities');
-                onSelectTab?.('hospital');
-              }}
-              className="flex-1 min-w-[150px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
-            >
-              <FlaskConical className="w-3.5 h-3.5 text-teal-500" />
-              <span>Diagnostics &amp; Lab</span>
-            </button>
-
-            {/* 7. Blood Bank */}
-            <button
-              onClick={() => {
-                setActiveSection('facilities');
-                onSelectTab?.('hospital');
-              }}
-              className="flex-1 min-w-[140px] py-2.5 px-4 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2 text-slate-600 hover:text-[#EA580C] hover:bg-[#FFF5ED]"
-            >
-              <Droplet className="w-3.5 h-3.5 text-rose-500" />
-              <span>Blood Bank</span>
-            </button>
-          </div>
-          
-          {/* 
-            ROW 1: 4 KEY REAL-TIME READINESS METRICS
-            Total Beds | ICU Beds | Ventilators | OPD Queue
-          */}
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-            
-            {/* 1. Total Beds */}
-            <div 
-              onClick={handleGoToBeds}
-              className="bg-white p-4.5 rounded-2xl border border-slate-100 shadow-2xs hover:shadow-xs hover:border-blue-300 transition-all flex items-center justify-between cursor-pointer group"
-              title="Click to view detailed Bed Management & Ward Matrix"
-            >
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-blue-50 text-[#1A56DB] group-hover:bg-blue-600 group-hover:text-white flex items-center justify-center shrink-0 transition-colors">
-                  <Bed className="w-5 h-5 stroke-[2.2]" />
-                </div>
-                <div>
-                  <div className="text-xl sm:text-2xl font-black text-slate-900 leading-tight">
-                    {totalBeds}
-                  </div>
-                  <div className="text-xs text-slate-500 font-medium">Total Beds</div>
-                </div>
-              </div>
-              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200/80 flex items-center gap-1 shrink-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                {readyBedsCount} Available
-              </span>
-            </div>
-
-            {/* 2. ICU Beds */}
-            <div className="bg-white p-4.5 rounded-2xl border border-orange-100/60 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
-                  <Activity className="w-5 h-5 stroke-[2.2]" />
-                </div>
-                <div>
-                  <div className="text-xl sm:text-2xl font-black text-slate-900 leading-tight">
-                    {icuBedsCount}
-                  </div>
-                  <div className="text-xs text-slate-500 font-medium">ICU Beds</div>
-                </div>
-              </div>
-              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200/80 flex items-center gap-1 shrink-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                {icuReadyCount} Available
-              </span>
-            </div>
-
-            {/* 3. Ventilators */}
-            <div className="bg-white p-4.5 rounded-2xl border border-orange-100/60 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-orange-50 text-[#EA580C] flex items-center justify-center shrink-0">
-                  <Wind className="w-5 h-5 stroke-[2.2]" />
-                </div>
-                <div>
-                  <div className="text-xl sm:text-2xl font-black text-slate-900 leading-tight">
-                    {ventilatorsCount}
-                  </div>
-                  <div className="text-xs text-slate-500 font-medium">Ventilators</div>
-                </div>
-              </div>
-              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-200/80 flex items-center gap-1 shrink-0">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                {ventilatorsReadyCount} Available
-              </span>
-            </div>
-
-            {/* 4. OPD Queue */}
-            <div className="bg-white p-4.5 rounded-2xl border border-orange-100/60 shadow-2xs hover:shadow-xs transition-shadow flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-11 h-11 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
-                  <Users className="w-5 h-5 stroke-[2.2]" />
-                </div>
-                <div>
-                  <div className="text-xl sm:text-2xl font-black text-slate-900 leading-tight">
-                    {activeToken ? '1' : '1'}
-                  </div>
-                  <div className="text-xs text-slate-500 font-medium">OPD Queue</div>
-                </div>
-              </div>
-              <span className="text-[11px] font-bold px-2.5 py-1 rounded-full bg-orange-50 text-orange-600 border border-orange-200/80 flex items-center gap-1 shrink-0">
-                <Clock className="w-3 h-3 text-orange-500" />
-                ~{activeToken ? activeToken.estimatedWaitMinutes : 14} min
-              </span>
-            </div>
 
           </div>
 
           {/* 
-            ROW 2: MIDDLE SECTION CARDS MATCHING REFERENCE DESIGN
-            1. Your Next Appointment Card (Left)
-            2. Hospital Resources Card (Right)
+            ============================================================
+            PATIENT DASHBOARD OVERVIEW
+            Order:
+            Row 1 (TOP / FIRST): Health Profile + Notifications (Image 4 Request)
+            Row 2: Upcoming Appointment (+ Quick Booking Button) + Queue Token & Status
+            Row 3: Appointment Requests Status
+            ============================================================
           */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            
-            {/* Card 1: Your Next Appointment matching reference layout */}
-            <div className="bg-white p-6 rounded-3xl border border-orange-100/90 shadow-2xs flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-xl bg-orange-50 text-[#EA580C] flex items-center justify-center">
-                      <Calendar className="w-4 h-4" />
+          <div className="space-y-6 pt-1">
+
+            {/* ROW 1 (FIRST AT TOP): HEALTH PROFILE + NOTIFICATIONS */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+              {/* 1. Health Profile */}
+              <div className="bg-white p-6 sm:p-7 rounded-3xl border border-orange-100/90 shadow-2xs flex flex-col justify-between space-y-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-[#FFF3E8] text-[#EA580C] flex items-center justify-center">
+                      <HeartPulse className="w-5 h-5" />
                     </div>
-                    <h3 className="text-sm font-bold text-slate-900">Your Next Appointment</h3>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900">Health Profile</h3>
+                      <p className="text-xs text-slate-500">Registered citizen medical snapshot</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setActiveSection('records');
+                      onSelectTab?.('profile');
+                    }}
+                    className="text-xs font-bold text-[#EA580C] hover:underline cursor-pointer flex items-center gap-1"
+                  >
+                    <span>Full History</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3.5 rounded-2xl bg-[#FFFBF7] border border-orange-100">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Patient Name</span>
+                    <strong className="text-slate-900 font-extrabold mt-0.5 block truncate">{patientName}</strong>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-[#FFFBF7] border border-orange-100">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 block">Age</span>
+                    <strong className="text-slate-900 font-extrabold mt-0.5 block">{patientAge} Years</strong>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-rose-50/70 border border-rose-200/80">
+                    <span className="text-[10px] font-bold uppercase text-rose-600 block">Blood Group</span>
+                    <strong className="text-rose-700 font-black mt-0.5 block">🩸 {bloodGroup}</strong>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                  <div className="p-3.5 rounded-2xl bg-[#FFF8F2] border border-orange-100 space-y-1">
+                    <span className="text-[10px] font-bold uppercase text-[#EA580C] block">Known Allergies</span>
+                    <div className="font-semibold text-slate-800">Penicillin, Dust Mites</div>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-[#FFF8F2] border border-orange-100 space-y-1">
+                    <span className="text-[10px] font-bold uppercase text-[#EA580C] block">Existing Conditions</span>
+                    <div className="font-semibold text-slate-800">Seasonal Allergy, Mild BP Monitoring</div>
+                  </div>
+                </div>
+              </div>
+
+              {/* 2. Notifications */}
+              <div className="bg-white p-6 sm:p-7 rounded-3xl border border-orange-100/90 shadow-2xs space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-[#FFF3E8] text-[#EA580C] flex items-center justify-center relative">
+                      <Bell className="w-5 h-5" />
+                      {queueNotifications.filter(n => !n.read).length > 0 && (
+                        <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-[#EA580C] text-white text-[9px] font-black flex items-center justify-center">
+                          {queueNotifications.filter(n => !n.read).length}
+                        </span>
+                      )}
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900">Notifications</h3>
+                      <p className="text-xs text-slate-500">Appointment acceptance/decline alerts &amp; queue updates</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
+                  {queueNotifications.slice(0, 4).map((notif) => (
+                    <div
+                      key={notif.id}
+                      onClick={() => setQueueNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n))}
+                      className={`p-3.5 rounded-2xl border transition-all cursor-pointer flex items-start justify-between gap-3 text-xs ${
+                        notif.read
+                          ? 'bg-[#FFFDFB] border-orange-100/70 text-slate-600'
+                          : 'bg-[#FFF5EC] border-orange-200 text-slate-900 shadow-2xs'
+                      }`}
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <strong className="font-black text-slate-900">{notif.title}</strong>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-white text-[#EA580C] border border-orange-200">
+                            {notif.tag}
+                          </span>
+                        </div>
+                        <p className="text-slate-600 leading-relaxed">{notif.message}</p>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-medium shrink-0">{notif.timestamp}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+
+            {/* ROW 2: UPCOMING APPOINTMENT (+ QUICK BOOKING) + QUEUE TOKEN & STATUS */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* 3. Upcoming Appointment & Quick Booking Button */}
+              <div className="bg-white p-6 sm:p-7 rounded-3xl border border-orange-100/90 shadow-2xs flex flex-col justify-between space-y-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-[#FFF3E8] text-[#EA580C] flex items-center justify-center">
+                      <Calendar className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900">Upcoming Appointment</h3>
+                      <p className="text-xs text-slate-500">Scheduled OPD consultation &amp; quick booking</p>
+                    </div>
                   </div>
                   <button 
                     onClick={handleGoToAppointments}
@@ -2020,134 +2233,196 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                   </button>
                 </div>
 
-                {activeToken && activeToken.status === 'In Queue' ? (
+                {activeToken && activeToken.status !== 'Cancelled' && activeToken.status !== 'Declined' ? (
                   <div 
                     onClick={handleGoToAppointments}
-                    className="p-4 rounded-2xl bg-[#FFF8F2] border border-orange-200/80 cursor-pointer hover:border-orange-300 transition-all space-y-3"
+                    className="p-5 rounded-2xl bg-[#FFF8F2] border border-orange-200/80 cursor-pointer hover:border-orange-300 transition-all space-y-3"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2.5">
-                        <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-orange-500 to-amber-500 text-white font-bold text-xs flex items-center justify-center">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-[#F97316] to-[#EA580C] text-white font-bold text-xs flex items-center justify-center">
                           {activeToken.doctorName.replace(/^Dr\.\s*/, '').slice(0, 2).toUpperCase()}
                         </div>
                         <div>
-                          <div className="text-xs font-bold text-slate-900">{activeToken.doctorName}</div>
-                          <div className="text-[10px] text-slate-500">{activeToken.department}</div>
+                          <div className="text-sm font-black text-slate-900">{activeToken.doctorName}</div>
+                          <div className="text-xs text-slate-600">{activeToken.department}</div>
                         </div>
                       </div>
-                      <span className="px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 text-emerald-800">
-                        Token #{activeToken.tokenNumber}
+                      <span className={`px-3 py-1 rounded-full text-[11px] font-extrabold ${
+                        activeToken.status === 'Pending'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                          : 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                      }`}>
+                        {activeToken.status === 'Pending' ? 'Pending Hospital Approval' : `Approved • #${activeToken.tokenNumber}`}
                       </span>
                     </div>
 
-                    <div className="flex items-center justify-between text-xs pt-2 border-t border-orange-200/60 text-slate-600">
-                      <span className="flex items-center gap-1">
-                        <Calendar className="w-3.5 h-3.5 text-orange-500" />
+                    <div className="flex items-center justify-between text-xs pt-3 border-t border-orange-200/60 text-slate-700 font-medium">
+                      <span className="flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5 text-[#EA580C]" />
                         {activeToken.date}
                       </span>
-                      <span className="flex items-center gap-1">
-                        <Clock className="w-3.5 h-3.5 text-orange-500" />
+                      <span className="flex items-center gap-1.5">
+                        <Clock className="w-3.5 h-3.5 text-[#EA580C]" />
                         {activeToken.timeSlot}
                       </span>
                     </div>
                   </div>
                 ) : (
-                  <div className="py-6 flex flex-col items-center justify-center text-center">
-                    {/* Orange Calendar Clock Vector Illustration */}
-                    <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-orange-100 to-amber-100 flex items-center justify-center mb-3 shadow-2xs relative">
-                      <Calendar className="w-10 h-10 text-[#EA580C]" />
-                      <div className="absolute -bottom-1 -right-1 w-7 h-7 rounded-full bg-white shadow-xs border border-orange-200 flex items-center justify-center">
-                        <Clock className="w-4 h-4 text-[#EA580C]" />
-                      </div>
+                  <div className="py-4 flex flex-col items-center justify-center text-center bg-[#FFFBF8] rounded-2xl border border-orange-100/70 p-6">
+                    <div className="w-14 h-14 rounded-2xl bg-[#FFF0E5] text-[#EA580C] flex items-center justify-center mb-3">
+                      <Calendar className="w-7 h-7" />
                     </div>
-
-                    <h4 className="text-sm font-bold text-slate-900">No Upcoming Appointments</h4>
-                    <p className="text-xs text-slate-500 mt-1 mb-4">Book an appointment to consult with a doctor</p>
-
-                    <button
-                      onClick={handleGoToAppointments}
-                      className="px-6 py-2.5 rounded-full bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:from-[#EA580C] hover:to-[#C2410C] text-white font-extrabold text-xs shadow-md shadow-orange-500/20 transition-all cursor-pointer"
-                    >
-                      Book Appointment
-                    </button>
+                    <h4 className="text-sm font-bold text-slate-900">No Upcoming Appointment</h4>
+                    <p className="text-xs text-slate-500 mt-1">Book an appointment to consult with a doctor</p>
                   </div>
                 )}
-              </div>
-            </div>
 
-            {/* Card 2: Hospital Resources matching reference layout */}
-            <div className="bg-white p-6 rounded-3xl border border-orange-100/90 shadow-2xs flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-2">
-                    <span className="text-base text-amber-500">⭐</span>
-                    <h3 className="text-sm font-bold text-slate-900">Hospital Resources</h3>
+                {/* Quick Booking Button */}
+                <div className="pt-1">
+                  <button
+                    onClick={handleGoToAppointments}
+                    className="w-full py-3 px-5 rounded-2xl bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:from-[#EA580C] hover:to-[#C2410C] text-white font-black text-xs sm:text-sm shadow-md shadow-orange-500/20 transition-all cursor-pointer flex items-center justify-center gap-2"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Quick Book Appointment</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+
+              {/* 4. Queue Token & Status */}
+              <div className="bg-white p-6 sm:p-7 rounded-3xl border border-orange-100/90 shadow-2xs flex flex-col justify-between space-y-5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-2xl bg-[#FFF3E8] text-[#EA580C] flex items-center justify-center">
+                      <Ticket className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="text-base font-black text-slate-900">Queue Token &amp; Status</h3>
+                      <p className="text-xs text-slate-500">Live OPD counter tracking</p>
+                    </div>
                   </div>
 
-                  <span className="flex items-center gap-1.5 text-xs font-bold text-emerald-600">
+                  <span className="px-3 py-1 rounded-full text-[11px] font-black bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-                    Live Status
+                    {activeToken ? activeToken.status : 'Waiting Preview'}
                   </span>
                 </div>
 
-                {/* 4 Resource Cards in 2x2 grid */}
-                <div className="grid grid-cols-2 gap-3 my-2">
-                  <div 
-                    onClick={handleGoToBeds}
-                    className="p-3.5 rounded-2xl bg-slate-50/70 border border-slate-100 hover:border-orange-200 hover:bg-[#FFF9F5] transition-all flex items-center gap-3 cursor-pointer group"
-                  >
-                    <div className="w-9 h-9 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-                      <Bed className="w-4.5 h-4.5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-slate-800">Beds</div>
-                      <div className="text-[10px] text-emerald-600 font-semibold">{readyBedsCount} Available</div>
-                    </div>
-                  </div>
-
-                  <div 
-                    onClick={() => {
-                      setActiveSection('beds');
-                      setResourceSubTab('equipment');
-                    }}
-                    className="p-3.5 rounded-2xl bg-slate-50/70 border border-slate-100 hover:border-orange-200 hover:bg-[#FFF9F5] transition-all flex items-center gap-3 cursor-pointer group"
-                  >
-                    <div className="w-9 h-9 rounded-xl bg-orange-50 text-[#EA580C] flex items-center justify-center shrink-0">
-                      <Wind className="w-4.5 h-4.5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-slate-800">Ventilators</div>
-                      <div className="text-[10px] text-emerald-600 font-semibold">{ventilatorsReadyCount} Available</div>
+                <div className="grid grid-cols-2 gap-3.5">
+                  <div className="p-4 rounded-2xl bg-[#FFF8F2] border border-orange-200/70">
+                    <div className="text-[11px] font-bold text-[#EA580C] uppercase">Your Token</div>
+                    <div className="text-lg sm:text-xl font-black text-slate-900 font-mono mt-1 truncate">
+                      {!activeToken
+                        ? 'Not Issued'
+                        : activeToken.status === 'Pending' || activeToken.tokenNumber === 'AWAITING-APPROVAL'
+                        ? 'Pending Approval'
+                        : activeToken.status === 'Declined' || activeToken.tokenNumber === 'DECLINED'
+                        ? 'Declined'
+                        : activeToken.tokenNumber}
                     </div>
                   </div>
 
-                  <div 
-                    onClick={() => setActiveSection('facilities')}
-                    className="p-3.5 rounded-2xl bg-slate-50/70 border border-slate-100 hover:border-orange-200 hover:bg-[#FFF9F5] transition-all flex items-center gap-3 cursor-pointer group"
-                  >
-                    <div className="w-9 h-9 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center shrink-0">
-                      <Accessibility className="w-4.5 h-4.5" />
-                    </div>
-                    <div>
-                      <div className="text-xs font-bold text-slate-800">Wheelchairs</div>
-                      <div className="text-[10px] text-purple-600 font-semibold">16 Available</div>
+                  <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100">
+                    <div className="text-[11px] font-bold text-slate-500 uppercase">Currently Serving</div>
+                    <div className="text-2xl font-black text-[#EA580C] font-mono mt-1">
+                      {activeToken ? (activeToken.currentServingToken || 'A19') : 'A19'}
                     </div>
                   </div>
 
-                  <div 
-                    onClick={() => setActiveSection('facilities')}
-                    className="p-3.5 rounded-2xl bg-slate-50/70 border border-slate-100 hover:border-orange-200 hover:bg-[#FFF9F5] transition-all flex items-center gap-3 cursor-pointer group"
-                  >
-                    <div className="w-9 h-9 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center shrink-0">
-                      <FlaskConical className="w-4.5 h-4.5" />
+                  <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100">
+                    <div className="text-[11px] font-bold text-slate-500 uppercase">People Ahead</div>
+                    <div className="text-xl font-black text-slate-900 font-mono mt-1">
+                      {activeToken ? Math.max(0, activeToken.queuePosition - 1) : 5}
                     </div>
-                    <div>
-                      <div className="text-xs font-bold text-slate-800">Lab Services</div>
-                      <div className="text-[10px] text-teal-600 font-semibold">Available</div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-emerald-50/60 border border-emerald-200/80">
+                    <div className="text-[11px] font-bold text-emerald-700 uppercase">Estimated Wait</div>
+                    <div className="text-xl font-black text-emerald-800 font-mono mt-1">
+                      {activeToken ? `${activeToken.estimatedWaitMinutes} mins` : '25 mins'}
                     </div>
                   </div>
                 </div>
+
+                <button
+                  onClick={handleGoToQueue}
+                  className="w-full py-2.5 px-4 rounded-2xl bg-[#FFF3E8] hover:bg-[#FFE8D6] text-[#C2410C] font-extrabold text-xs border border-[#FED7AA] transition-all cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <Clock className="w-4 h-4 text-[#EA580C]" />
+                  <span>Open Live Queue Management</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
+                </button>
               </div>
+
+            </div>
+
+            {/* ROW 3: APPOINTMENT REQUESTS STATUS */}
+            <div className="bg-white p-6 sm:p-7 rounded-3xl border border-orange-100/90 shadow-2xs space-y-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-10 h-10 rounded-2xl bg-[#FFF3E8] text-[#EA580C] flex items-center justify-center">
+                    <ClipboardList className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-black text-slate-900">Appointment Requests Status</h3>
+                    <p className="text-xs text-slate-500">Hospital triage review &amp; response</p>
+                  </div>
+                </div>
+                <button
+                  onClick={handleGoToAppointments}
+                  className="text-xs font-bold text-[#EA580C] hover:underline cursor-pointer"
+                >
+                  Manage
+                </button>
+              </div>
+
+              {activeToken || patientRequestsHistory.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {(activeToken ? [activeToken, ...patientRequestsHistory.filter(r => r.requestId !== activeToken.requestId && r.tokenNumber !== activeToken.tokenNumber)] : patientRequestsHistory).slice(0, 6).map((req, idx) => (
+                    <div key={req.requestId || req.tokenNumber || idx} className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100 space-y-2 text-xs">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono font-black text-slate-800 bg-white px-2.5 py-0.5 rounded-lg border border-orange-200">
+                          {req.status === 'Pending' || req.tokenNumber === 'AWAITING-APPROVAL'
+                            ? req.requestId || 'Awaiting Approval'
+                            : req.status === 'Declined' || req.tokenNumber === 'DECLINED'
+                            ? 'No Token (Declined)'
+                            : req.tokenNumber}
+                        </span>
+                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase ${
+                          req.status === 'In Queue' || req.status === 'Called' || req.status === 'Completed'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                            : req.status === 'Declined'
+                            ? 'bg-rose-100 text-rose-800 border border-rose-200'
+                            : req.status === 'Cancelled'
+                            ? 'bg-slate-200 text-slate-700'
+                            : 'bg-amber-100 text-amber-800 border border-amber-200'
+                        }`}>
+                          {req.status === 'In Queue' || req.status === 'Called' ? 'Approved' : req.status}
+                        </span>
+                      </div>
+                      <div className="font-bold text-slate-900">{req.doctorName} &bull; {req.department}</div>
+                      <div className="text-[11px] text-slate-500">{req.date} &bull; {req.timeSlot}</div>
+                      {req.status === 'Declined' && req.declineReason && (
+                        <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-[11px] font-semibold">
+                          <strong>Hospital Reason:</strong> {req.declineReason}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-6 rounded-2xl bg-[#FFFBF8] border border-orange-100/70 text-center text-xs text-slate-500 space-y-2">
+                  <p>No appointment requests submitted yet.</p>
+                  <button
+                    onClick={handleGoToAppointments}
+                    className="text-xs font-bold text-[#EA580C] hover:underline cursor-pointer"
+                  >
+                    Submit your first appointment request &rarr;
+                  </button>
+                </div>
+              )}
             </div>
 
           </div>
@@ -2155,7 +2430,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
         </div>
       )}
 
-      {/* 
+            {/* 
         ============================================================
         4. DEDICATED APPOINTMENTS PAGE (Book OPD & My Appointments)
         Visible when activeSection === 'appointments'
@@ -2408,36 +2683,19 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                           </div>
                         </div>
 
-                        {/* Quick Interactive Hospital Simulator (Requested: hospital pathtu accept panuvaga ila na decline panuvaga) */}
-                        <div className="relative z-10 p-3.5 bg-black/35 rounded-2xl border border-amber-400/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                        {/* Direct Hospital Dashboard Routing Status */}
+                        <div className="relative z-10 p-3.5 bg-black/35 rounded-2xl border border-amber-400/30 flex items-center justify-between gap-3">
                           <div>
                             <div className="text-xs font-black text-amber-200 flex items-center gap-1.5">
-                              <span>🏥 {currentHospital.name} — OPD Triage Action:</span>
+                              <span>🏥 Directly Sent to {currentHospital.name} Hospital Dashboard</span>
                             </div>
-                            <div className="text-[10px] text-amber-300/80">
-                              Hospital staff verifies schedule and accepts or declines request.
+                            <div className="text-[11px] text-amber-100/90 mt-0.5">
+                              Once {currentHospital.name} accepts or declines this request from their Patient Portal Desk, this card updates automatically to Approved / Declined.
                             </div>
                           </div>
-
-                          <div className="flex items-center gap-2 shrink-0">
-                            <button
-                              type="button"
-                              onClick={handleAcceptRequest}
-                              className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-extrabold text-xs shadow-md transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                              <span>Accept &amp; Issue Token</span>
-                            </button>
-
-                            <button
-                              type="button"
-                              onClick={() => setShowDeclineModal(true)}
-                              className="px-3 py-2 rounded-xl bg-rose-500/80 hover:bg-rose-600 text-white font-extrabold text-xs shadow-md transition-all cursor-pointer flex items-center gap-1.5 active:scale-95"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                              <span>Decline</span>
-                            </button>
-                          </div>
+                          <span className="px-3 py-1 rounded-full bg-amber-400/20 border border-amber-300/40 text-amber-100 text-[10px] font-black uppercase shrink-0">
+                            Live Sync Active
+                          </span>
                         </div>
 
                       </div>
@@ -2610,7 +2868,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                       <div className="flex items-center gap-2">
                         <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
                         <span className="text-[11px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                          Confirmed Active Appointment
+                          Approved by {currentHospital.name}
                         </span>
                       </div>
                       <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">
@@ -2918,18 +3176,96 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
               {/* Application Form */}
               <form onSubmit={handleApplyOPD} className="space-y-5">
-                
-                {/* Row 1: Department & Doctor */}
+
+                {/* 1. Patient Basic Info: Name, Age, Blood Group, Mobile */}
+                <div className="p-4 sm:p-5 bg-[#FFF8F2] rounded-2xl border border-orange-200/80 space-y-3.5">
+                  <div className="text-xs font-black text-[#EA580C] uppercase tracking-wider">
+                    1. Patient Details (நோயாளி விவரம்)
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Patient Name <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={patientName}
+                        onChange={(e) => setPatientName(e.target.value)}
+                        placeholder="Enter full name"
+                        className="w-full text-xs px-3 py-2.5 border border-orange-200 rounded-xl bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#EA580C]"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Age <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={patientAge}
+                        onChange={(e) => {
+                          setPatientAge(e.target.value);
+                          setPatientAgeGender(`${e.target.value} Yrs • ${bloodGroup}`);
+                        }}
+                        placeholder="e.g. 28"
+                        className="w-full text-xs px-3 py-2.5 border border-orange-200 rounded-xl bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#EA580C]"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Blood Group <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        value={bloodGroup}
+                        onChange={(e) => {
+                          setBloodGroup(e.target.value);
+                          setPatientAgeGender(`${patientAge} Yrs • ${e.target.value}`);
+                        }}
+                        className="w-full text-xs px-3 py-2.5 border border-orange-200 rounded-xl bg-white font-bold text-rose-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#EA580C]"
+                        required
+                      >
+                        <option value="O+">O+ (O Positive)</option>
+                        <option value="O-">O- (O Negative)</option>
+                        <option value="A+">A+ (A Positive)</option>
+                        <option value="A-">A- (A Negative)</option>
+                        <option value="B+">B+ (B Positive)</option>
+                        <option value="B-">B- (B Negative)</option>
+                        <option value="AB+">AB+ (AB Positive)</option>
+                        <option value="AB-">AB- (AB Negative)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                        Mobile Number <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="tel"
+                        value={patientMobile}
+                        onChange={(e) => setPatientMobile(e.target.value)}
+                        className="w-full text-xs px-3 py-2.5 border border-orange-200 rounded-xl bg-white font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-[#EA580C]"
+                        required
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. Department & Consulting Doctor */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Department */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      1. Select Clinical Specialty / Department <span className="text-rose-500">*</span>
+                      2. Select Department <span className="text-rose-500">*</span>
                     </label>
                     <select
                       value={department}
                       onChange={(e) => handleDepartmentChange(e.target.value)}
-                      className="w-full text-xs px-3.5 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1A56DB] bg-white font-semibold text-slate-800 cursor-pointer shadow-2xs"
+                      className="w-full text-xs px-3.5 py-2.5 border border-orange-200/80 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#EA580C] bg-white font-semibold text-slate-800 cursor-pointer shadow-2xs"
                     >
                       <option value="Cardiology OPD">Cardiology OPD (Heart, Chest Pain & Vascular)</option>
                       <option value="General Medicine">General Medicine (Fever, Acute Illness & General Review)</option>
@@ -2940,101 +3276,81 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                     </select>
                   </div>
 
-                  {/* Consulting Doctor */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      2. Consulting Duty Physician <span className="text-rose-500">*</span>
+                      3. Consulting Doctor <span className="text-rose-500">*</span>
                     </label>
                     <select
                       value={doctorName}
                       onChange={(e) => setDoctorName(e.target.value)}
-                      className="w-full text-xs px-3.5 py-3 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1A56DB] bg-white font-semibold text-slate-800 cursor-pointer shadow-2xs"
+                      className="w-full text-xs px-3.5 py-2.5 border border-orange-200/80 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#EA580C] bg-white font-semibold text-slate-800 cursor-pointer shadow-2xs"
                     >
-                      <option value="Dr. Arun Kumar">Dr. Arun Kumar (Interventional Cardiology & Critical Care)</option>
-                      <option value="Dr. Sundaramoorthy M.">Dr. Sundaramoorthy M. (General Medicine & Diabetology)</option>
-                      <option value="Dr. Meenakshi S.">Dr. Meenakshi S. (Pulmonology Specialist & Asthma Care)</option>
-                      <option value="Dr. Priya Dharshini">Dr. Priya Dharshini (Pediatrics & Child Wellness)</option>
-                      <option value="Dr. R. Rajeshwaran">Dr. R. Rajeshwaran (Orthopedic Surgeon & Joint Care)</option>
+                      <option value="Dr. Arun Kumar">Dr. Arun Kumar (Cardiology & Critical Care)</option>
+                      <option value="Dr. Sundaramoorthy M.">Dr. Sundaramoorthy M. (General Medicine)</option>
+                      <option value="Dr. Meenakshi S.">Dr. Meenakshi S. (Pulmonology Specialist)</option>
+                      <option value="Dr. Priya Dharshini">Dr. Priya Dharshini (Pediatrics)</option>
+                      <option value="Dr. R. Rajeshwaran">Dr. R. Rajeshwaran (Orthopedic Surgeon)</option>
                     </select>
                   </div>
                 </div>
 
-                {/* Row 2: Date & Time Slot */}
+                {/* 3. Date Select & Time Slot Select */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {/* Date */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      3. Consultation Date <span className="text-rose-500">*</span>
+                      4. Date Select <span className="text-rose-500">*</span>
                     </label>
                     <input
                       type="date"
                       value={date}
                       onChange={(e) => setDate(e.target.value)}
-                      className="w-full text-xs px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1A56DB] font-semibold text-slate-800 shadow-2xs"
+                      className="w-full text-xs px-3.5 py-2.5 border border-orange-200/80 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#EA580C] font-semibold text-slate-800 shadow-2xs"
                       required
                     />
-                    {/* Quick Date Pills */}
                     <div className="flex items-center gap-2 mt-2">
                       <button
                         type="button"
-                        onClick={() => setDate('2026-11-27')}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all cursor-pointer ${
-                          date === '2026-11-27' ? 'bg-[#1A56DB] text-white border-[#1A56DB]' : 'bg-slate-50 text-slate-600 border-slate-200'
-                        }`}
-                      >
-                        Today (Nov 27)
-                      </button>
-                      <button
-                        type="button"
                         onClick={() => setDate('2026-11-28')}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all cursor-pointer ${
-                          date === '2026-11-28' ? 'bg-[#1A56DB] text-white border-[#1A56DB]' : 'bg-slate-50 text-slate-600 border-slate-200'
+                        className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                          date === '2026-11-28' ? 'bg-[#EA580C] text-white border-[#EA580C]' : 'bg-[#FFFBF7] text-slate-600 border-orange-200'
                         }`}
                       >
-                        Tomorrow (Nov 28)
+                        Today (Nov 28)
                       </button>
                       <button
                         type="button"
-                        onClick={() => setDate('2026-11-30')}
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-lg border transition-all cursor-pointer ${
-                          date === '2026-11-30' ? 'bg-[#1A56DB] text-white border-[#1A56DB]' : 'bg-slate-50 text-slate-600 border-slate-200'
+                        onClick={() => setDate('2026-11-29')}
+                        className={`text-[10px] font-bold px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
+                          date === '2026-11-29' ? 'bg-[#EA580C] text-white border-[#EA580C]' : 'bg-[#FFFBF7] text-slate-600 border-orange-200'
                         }`}
                       >
-                        Monday (Nov 30)
+                        Tomorrow (Nov 29)
                       </button>
                     </div>
                   </div>
 
-                  {/* Time Slot */}
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      4. Preferred OPD Time Session <span className="text-rose-500">*</span>
+                      5. Time Slot Select <span className="text-rose-500">*</span>
                     </label>
                     <select
                       value={timeSlot}
                       onChange={(e) => setTimeSlot(e.target.value)}
-                      className="w-full text-xs px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1A56DB] bg-white font-semibold text-slate-800 cursor-pointer shadow-2xs"
+                      className="w-full text-xs px-3.5 py-2.5 border border-orange-200/80 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#EA580C] bg-white font-semibold text-slate-800 cursor-pointer shadow-2xs"
                     >
                       <option value="09:00 AM - 10:30 AM">Morning Session (09:00 AM - 10:30 AM)</option>
                       <option value="10:30 AM - 12:00 PM">Late Morning (10:30 AM - 12:00 PM)</option>
                       <option value="12:00 PM - 01:30 PM">Afternoon Slot (12:00 PM - 01:30 PM)</option>
                       <option value="02:30 PM - 04:30 PM">Evening Clinic (02:30 PM - 04:30 PM)</option>
                     </select>
-
-                    <div className="text-[10px] text-slate-500 mt-2 flex items-center gap-1">
-                      <Clock className="w-3 h-3 text-slate-400" />
-                      <span>Average consultation window: ~15 minutes per token</span>
-                    </div>
                   </div>
                 </div>
 
-                {/* Row 3: Purpose of Visit / Symptoms */}
+                {/* 4. Appointment Purpose */}
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                    5. Purpose of Consultation / Medical Complaint <span className="text-rose-500">*</span>
+                    6. Appointment Purpose <span className="text-rose-500">*</span>
                   </label>
-                  
-                  {/* Quick Selection Pills */}
                   <div className="flex items-center gap-1.5 flex-wrap mb-2">
                     {commonPurposes.map(p => (
                       <button
@@ -3043,64 +3359,37 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                         onClick={() => setPurpose(p)}
                         className={`text-[11px] font-semibold px-2.5 py-1 rounded-lg border transition-all cursor-pointer ${
                           purpose === p 
-                            ? 'bg-blue-100 text-[#1A56DB] border-blue-300 font-bold' 
-                            : 'bg-slate-50 text-slate-600 border-slate-200 hover:bg-slate-100'
+                            ? 'bg-[#FFF0E5] text-[#EA580C] border-orange-300 font-bold' 
+                            : 'bg-[#FFFBF7] text-slate-600 border-orange-100 hover:bg-orange-50'
                         }`}
                       >
                         {p}
                       </button>
                     ))}
                   </div>
-
                   <input
                     type="text"
                     value={purpose}
                     onChange={(e) => setPurpose(e.target.value)}
-                    placeholder="e.g. Chest pain with shortness of breath, blood pressure review, etc."
-                    className="w-full text-xs px-3.5 py-2.5 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#1A56DB] font-semibold text-slate-800 shadow-2xs"
+                    placeholder="e.g. Routine consultation, BP checkup, follow-up review..."
+                    className="w-full text-xs px-3.5 py-2.5 border border-orange-200/80 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#EA580C] font-semibold text-slate-800 shadow-2xs"
                     required
                   />
                 </div>
 
-                {/* Row 4: Patient Details */}
-                <div className="p-4 bg-slate-50 rounded-2xl border border-slate-200/80 space-y-3">
-                  <div className="text-xs font-bold text-slate-700">6. Patient Verification Details:</div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Patient Full Name</label>
-                      <input
-                        type="text"
-                        value={patientName}
-                        onChange={(e) => setPatientName(e.target.value)}
-                        className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium text-slate-800"
-                        required
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Age & Gender</label>
-                      <input
-                        type="text"
-                        value={patientAgeGender}
-                        onChange={(e) => setPatientAgeGender(e.target.value)}
-                        placeholder="e.g. 28 / Male"
-                        className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium text-slate-800"
-                        required
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-[11px] font-semibold text-slate-600 mb-1">Mobile (SMS Token Updates)</label>
-                      <input
-                        type="tel"
-                        value={patientMobile}
-                        onChange={(e) => setPatientMobile(e.target.value)}
-                        className="w-full text-xs px-3 py-2 border border-slate-200 rounded-lg bg-white font-medium text-slate-800"
-                        required
-                      />
-                    </div>
-                  </div>
+                {/* 5. Symptoms Description */}
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                    7. Symptoms Description <span className="text-rose-500">*</span>
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={symptomsDescription}
+                    onChange={(e) => setSymptomsDescription(e.target.value)}
+                    placeholder="Describe your symptoms clearly (e.g. Fever since 2 days, mild cough, chest tightness...)"
+                    className="w-full text-xs px-3.5 py-2.5 border border-orange-200/80 rounded-xl focus:outline-none focus:ring-2 focus:ring-[#EA580C] font-medium text-slate-800 shadow-2xs"
+                    required
+                  />
                 </div>
 
                 {/* Submit Button */}
@@ -3112,10 +3401,10 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
                   <button
                     type="submit"
-                    className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-[#1A56DB] hover:bg-blue-700 text-white font-black text-xs sm:text-sm shadow-md hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 group"
+                    className="w-full sm:w-auto px-6 py-3.5 rounded-2xl bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:from-[#EA580C] hover:to-[#C2410C] text-white font-black text-xs sm:text-sm shadow-md shadow-orange-500/20 hover:shadow-lg transition-all cursor-pointer flex items-center justify-center gap-2 group"
                   >
-                    <Ticket className="w-4 h-4 text-blue-200 group-hover:scale-110 transition-transform" />
-                    <span>Submit Application & Generate OPD Token</span>
+                    <Ticket className="w-4 h-4 text-orange-100 group-hover:scale-110 transition-transform" />
+                    <span>Submit Appointment Request</span>
                     <ArrowRight className="w-4 h-4 group-hover:translate-x-1 transition-transform" />
                   </button>
                 </div>
@@ -3521,8 +3810,12 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                   <div className="bg-amber-50/70 p-4 rounded-2xl border border-amber-200 shadow-2xs flex flex-col justify-between">
                     <div>
                       <div className="text-[10px] font-bold uppercase tracking-wider text-amber-700">3. Your Token</div>
-                      <div className="text-xl sm:text-2xl font-black text-amber-800 font-mono mt-0.5 tracking-tight truncate">
-                        {activeToken.tokenNumber}
+                      <div className="text-lg sm:text-xl font-black text-amber-800 font-mono mt-0.5 tracking-tight truncate">
+                        {activeToken.status === 'Pending' || activeToken.tokenNumber === 'AWAITING-APPROVAL'
+                          ? 'Awaiting Approval'
+                          : activeToken.status === 'Declined' || activeToken.tokenNumber === 'DECLINED'
+                          ? 'Declined'
+                          : activeToken.tokenNumber}
                       </div>
                     </div>
                     <div className="text-[10px] text-amber-900 font-semibold truncate mt-2">
@@ -3966,28 +4259,66 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
             </div>
           ) : (
-            /* EMPTY QUEUE STATE */
-            <div className="bg-white rounded-3xl p-8 sm:p-12 border border-slate-200/90 shadow-sm text-center max-w-xl mx-auto space-y-4">
-              <div className="w-16 h-16 rounded-3xl bg-blue-50 text-[#1A56DB] flex items-center justify-center mx-auto shadow-xs">
-                <Clock className="w-8 h-8" />
-              </div>
+            /* LIVE QUEUE MANAGEMENT PREVIEW WHEN NO ACTIVE PERSONAL TOKEN BOOKED */
+            <div className="bg-white rounded-3xl p-6 sm:p-8 border border-orange-100/90 shadow-2xs space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-orange-100">
+                <div>
+                  <span className="px-3 py-1 rounded-full text-[11px] font-black uppercase bg-emerald-50 text-emerald-700 border border-emerald-200 inline-flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                    Live Queue Management • {currentHospital.name}
+                  </span>
+                  <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-2">
+                    Live OPD Queue Status
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Real-time counter display (உதாரணம்: Your Token A24 &bull; Currently Serving A19)
+                  </p>
+                </div>
 
-              <h2 className="text-xl font-black text-slate-900">
-                No Active OPD Queue Token for Today
-              </h2>
-              <p className="text-xs sm:text-sm text-slate-500 leading-relaxed">
-                You do not have a queue token in progress at {currentHospital.name}. Please book an OPD appointment first to automatically generate your live consultation token.
-              </p>
-
-              <div className="pt-2">
                 <button
                   onClick={handleGoToAppointments}
-                  className="px-6 py-3.5 rounded-2xl bg-[#1A56DB] hover:bg-blue-700 text-white font-extrabold text-xs sm:text-sm shadow-md transition-all inline-flex items-center gap-2 cursor-pointer"
+                  className="px-5 py-3 rounded-2xl bg-gradient-to-r from-[#F97316] to-[#EA580C] hover:from-[#EA580C] hover:to-[#C2410C] text-white font-black text-xs shadow-md shadow-orange-500/20 transition-all inline-flex items-center gap-2 cursor-pointer"
                 >
                   <Calendar className="w-4 h-4" />
-                  <span>+ Book OPD Appointment Now</span>
+                  <span>Book Appointment to Get Token</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
+              </div>
+
+              {/* Exact 5 Fields Requested: Token Number, Currently Serving, People Ahead, Estimated Wait, Queue Status */}
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+                <div className="p-5 rounded-2xl bg-[#FFF8F2] border border-orange-200/80">
+                  <div className="text-[11px] font-bold uppercase text-[#EA580C]">Your Token</div>
+                  <div className="text-3xl font-black text-slate-900 font-mono mt-1">A24</div>
+                  <div className="text-[11px] text-slate-500 mt-1">Queue Token Number</div>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-blue-50/70 border border-blue-200">
+                  <div className="text-[11px] font-bold uppercase text-blue-700">Currently Serving</div>
+                  <div className="text-3xl font-black text-blue-800 font-mono mt-1">A19</div>
+                  <div className="text-[11px] text-blue-700 mt-1">Inside OPD Counter</div>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-[#FFFBF7] border border-orange-100">
+                  <div className="text-[11px] font-bold uppercase text-slate-500">People Ahead</div>
+                  <div className="text-3xl font-black text-slate-900 font-mono mt-1">5</div>
+                  <div className="text-[11px] text-slate-500 mt-1">Patients Waiting</div>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-emerald-50/70 border border-emerald-200">
+                  <div className="text-[11px] font-bold uppercase text-emerald-700">Estimated Wait</div>
+                  <div className="text-2xl font-black text-emerald-800 font-mono mt-1">25 minutes</div>
+                  <div className="text-[11px] text-emerald-700 mt-1">Avg ~5 min / patient</div>
+                </div>
+
+                <div className="p-5 rounded-2xl bg-amber-50/70 border border-amber-200 col-span-2 sm:col-span-1">
+                  <div className="text-[11px] font-bold uppercase text-amber-700">Queue Status</div>
+                  <div className="text-lg font-black text-amber-900 mt-1.5 flex items-center gap-1.5">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                    <span>Running Live</span>
+                  </div>
+                  <div className="text-[11px] text-amber-800 mt-1">Preview Mode</div>
+                </div>
               </div>
             </div>
           )}
@@ -4191,8 +4522,9 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
         <AIQueueUrgencyModule
           hospitalName={currentHospital.name}
           hospitalId={currentHospital.id}
-          patientName="Karthik Subramanian"
-          patientId="usr-patient-demo"
+          patientName={patientName || user?.name || 'Patient'}
+          patientId={user?.id || 'usr-patient'}
+          patientMobile={patientMobile}
           onBackToOverview={() => {
             setActiveSection('overview');
             onSelectTab?.('dashboard');
@@ -4242,6 +4574,82 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
           </div>
 
           {/* 
+            ============================================================
+            HOSPITAL RESOURCE AVAILABILITY SUMMARY (User Image 2 Request)
+            General Beds | ICU Beds | Wheelchairs | Oxygen Units | ECG Machines | Emergency Rooms
+            ============================================================
+          */}
+          <div className="bg-white rounded-3xl p-6 sm:p-7 border border-orange-100/90 shadow-2xs space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-orange-100">
+              <div>
+                <span className="text-[11px] font-black uppercase tracking-wider text-[#EA580C] bg-[#FFF3E8] px-3 py-1 rounded-full border border-orange-200">
+                  Resources Availability
+                </span>
+                <h2 className="text-lg sm:text-xl font-black text-slate-900 mt-2">
+                  Hospital Resource Availability &mdash; {currentHospital.name}
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Patient hospital select பண்ணும்போது அந்த hospital-ன் available beds &amp; medical equipments விவரம்
+                </p>
+              </div>
+              <span className="text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1.5 rounded-xl border border-emerald-200 flex items-center gap-1.5 shrink-0">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                Live Facility Sync
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+              <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center"><Bed className="w-5 h-5" /></div>
+                  <span className="text-sm font-bold text-slate-900">General Beds</span>
+                </div>
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">12 Available</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-rose-50 text-rose-600 flex items-center justify-center"><Activity className="w-5 h-5" /></div>
+                  <span className="text-sm font-bold text-slate-900">ICU Beds</span>
+                </div>
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">2 Available</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center"><Accessibility className="w-5 h-5" /></div>
+                  <span className="text-sm font-bold text-slate-900">Wheelchairs</span>
+                </div>
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">8 Available</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-orange-50 text-[#EA580C] flex items-center justify-center"><Wind className="w-5 h-5" /></div>
+                  <span className="text-sm font-bold text-slate-900">Oxygen Units</span>
+                </div>
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">5 Available</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-600 flex items-center justify-center"><HeartPulse className="w-5 h-5" /></div>
+                  <span className="text-sm font-bold text-slate-900">ECG Machines</span>
+                </div>
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">3 Available</span>
+              </div>
+
+              <div className="p-4 rounded-2xl bg-[#FFFBF7] border border-orange-100 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center"><Siren className="w-5 h-5" /></div>
+                  <span className="text-sm font-bold text-slate-900">Emergency Rooms</span>
+                </div>
+                <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-200">2 Available</span>
+              </div>
+            </div>
+          </div>
+
+                    {/* 
             ============================================================
             2 TOGGLE BUTTONS REQUESTED BY USER (Image 2):
             [ Bed Availability ]  [ Equipment Availability ]
@@ -4424,12 +4832,14 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
           {/* 
             ============================================================
-            IMAGE 2: 2. WARD-WISE AVAILABILITY
-            Shows:
-            - General Ward: 18 Available (62 Occupied · 80 Total)
-            - ICU: 4 Available (15 Occupied · 20 Total)
-            - Emergency Ward: 5 Available (10 Occupied · 15 Total)
-            - Private Ward: 8 Available (32 Occupied · 40 Total)
+            IMAGE 2 & USER SPECIFICATION: 2. WARD-WISE AVAILABILITY
+            Shows Ward breakdown by Gender & Priority Triage:
+            - Male Medical Ward (ஆண்கள் பொது பிரிவு)
+            - Female Medical Ward (பெண்கள் பொது பிரிவு)
+            - ICU (தீவிர சிகிச்சைப் பிரிவு - Critical Triage)
+            - Emergency & Trauma Bay (அவசர பிரிவு)
+            - Pediatrics & Maternity (குழந்தைகள் பிரிவு)
+            - Private Deluxe Ward (தனி வார்டு)
             ============================================================
           */}
           <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200/90 shadow-2xs space-y-4">
@@ -4440,107 +4850,200 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                 </div>
                 <div>
                   <h3 className="text-base sm:text-lg font-black text-slate-900">
-                    2. Ward-wise Availability
+                    2. Ward-wise Availability & Gender Partitioning
                   </h3>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Departmental bed capacity, occupancy percentage & real-time intake readiness
+                    Select a ward to view live seat-wise allocation, gender partitions & priority triage readiness
                   </p>
                 </div>
               </div>
+
+              {selectedWardFilter !== 'All Wards' && (
+                <button
+                  onClick={() => setSelectedWardFilter('All Wards')}
+                  className="px-3 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>Reset Ward Filter (அனைத்து வார்டுகளும்)</span>
+                </button>
+              )}
             </div>
 
-            {/* Ward List Matching User Mockup */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {/* 6 Ward Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
               
-              {/* Ward 1: General Ward */}
+              {/* Ward 1: Male Medical Ward */}
               <div 
-                onClick={() => setSelectedWardFilter('General Ward')}
+                onClick={() => setSelectedWardFilter(selectedWardFilter === 'Male Medical Ward' ? 'All Wards' : 'Male Medical Ward')}
                 className={`p-4 rounded-2xl border transition-all cursor-pointer ${
-                  selectedWardFilter === 'General Ward' 
-                    ? 'bg-blue-50 border-[#1A56DB] shadow-xs ring-2 ring-blue-200' 
+                  selectedWardFilter === 'Male Medical Ward' 
+                    ? 'bg-sky-50 border-sky-500 shadow-xs ring-2 ring-sky-200' 
                     : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <strong className="text-sm font-extrabold text-slate-900">General Ward</strong>
-                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300">
-                    18 Available
-                  </span>
-                </div>
-                <div className="text-xs text-slate-500 font-medium mt-1">
-                  62 Occupied &bull; 80 Total
-                </div>
-                <div className="mt-2.5 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                  <div className="h-full bg-[#1A56DB] rounded-full" style={{ width: '77%' }} />
-                </div>
-              </div>
-
-              {/* Ward 2: ICU */}
-              <div 
-                onClick={() => setSelectedWardFilter('ICU')}
-                className={`p-4 rounded-2xl border transition-all cursor-pointer ${
-                  selectedWardFilter === 'ICU' 
-                    ? 'bg-blue-50 border-[#1A56DB] shadow-xs ring-2 ring-blue-200' 
-                    : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
-                }`}
-              >
-                <div className="flex items-center justify-between">
-                  <strong className="text-sm font-extrabold text-slate-900">ICU (Critical Care)</strong>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-base">👨</span>
+                    <strong className="text-sm font-extrabold text-slate-900">Male Medical Ward</strong>
+                  </div>
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300">
                     4 Available
                   </span>
                 </div>
-                <div className="text-xs text-slate-500 font-medium mt-1">
-                  15 Occupied &bull; 20 Total
+                <div className="text-[11px] text-sky-800 font-bold mt-1">
+                  ஆண்கள் பொது பிரிவு &bull; Standard & High Urgency
+                </div>
+                <div className="text-xs text-slate-500 font-medium mt-0.5">
+                  4 Occupied &bull; 8 Total Beds
                 </div>
                 <div className="mt-2.5 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                  <div className="h-full bg-rose-500 rounded-full" style={{ width: '80%' }} />
+                  <div className="h-full bg-sky-500 rounded-full" style={{ width: '50%' }} />
                 </div>
               </div>
 
-              {/* Ward 3: Emergency Ward */}
+              {/* Ward 2: Female Medical Ward */}
               <div 
-                onClick={() => setSelectedWardFilter('Emergency Ward')}
+                onClick={() => setSelectedWardFilter(selectedWardFilter === 'Female Medical Ward' ? 'All Wards' : 'Female Medical Ward')}
+                className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+                  selectedWardFilter === 'Female Medical Ward' 
+                    ? 'bg-pink-50 border-pink-500 shadow-xs ring-2 ring-pink-200' 
+                    : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-base">👩</span>
+                    <strong className="text-sm font-extrabold text-slate-900">Female Medical Ward</strong>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300">
+                    4 Available
+                  </span>
+                </div>
+                <div className="text-[11px] text-pink-800 font-bold mt-1">
+                  பெண்கள் பொது பிரிவு &bull; Standard & High Urgency
+                </div>
+                <div className="text-xs text-slate-500 font-medium mt-0.5">
+                  4 Occupied &bull; 8 Total Beds
+                </div>
+                <div className="mt-2.5 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-pink-500 rounded-full" style={{ width: '50%' }} />
+                </div>
+              </div>
+
+              {/* Ward 3: ICU */}
+              <div 
+                onClick={() => setSelectedWardFilter(selectedWardFilter === 'ICU' ? 'All Wards' : 'ICU')}
+                className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+                  selectedWardFilter === 'ICU' 
+                    ? 'bg-rose-50 border-rose-500 shadow-xs ring-2 ring-rose-200' 
+                    : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                    <strong className="text-sm font-extrabold text-slate-900">ICU (Critical Care)</strong>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-rose-100 text-rose-800 border border-rose-300">
+                    2 Available
+                  </span>
+                </div>
+                <div className="text-[11px] text-rose-700 font-black mt-1 flex items-center gap-1">
+                  <span>🔴 Critical Triage</span>
+                  <span className="text-slate-400 font-normal">&bull; Mechanical Ventilation</span>
+                </div>
+                <div className="text-xs text-slate-500 font-medium mt-0.5">
+                  4 Occupied &bull; 6 Total Bays
+                </div>
+                <div className="mt-2.5 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-rose-500 rounded-full" style={{ width: '67%' }} />
+                </div>
+              </div>
+
+              {/* Ward 4: Emergency Ward */}
+              <div 
+                onClick={() => setSelectedWardFilter(selectedWardFilter === 'Emergency Ward' ? 'All Wards' : 'Emergency Ward')}
                 className={`p-4 rounded-2xl border transition-all cursor-pointer ${
                   selectedWardFilter === 'Emergency Ward' 
-                    ? 'bg-blue-50 border-[#1A56DB] shadow-xs ring-2 ring-blue-200' 
+                    ? 'bg-amber-50 border-amber-500 shadow-xs ring-2 ring-amber-200' 
                     : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <strong className="text-sm font-extrabold text-slate-900">Emergency Ward</strong>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-base">🚨</span>
+                    <strong className="text-sm font-extrabold text-slate-900">Emergency & Trauma</strong>
+                  </div>
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300">
-                    5 Available
+                    3 Available
                   </span>
                 </div>
-                <div className="text-xs text-slate-500 font-medium mt-1">
-                  10 Occupied &bull; 15 Total
+                <div className="text-[11px] text-amber-800 font-bold mt-1">
+                  அவசர விபத்து சிகிச்சை &bull; 🔴 Critical Resus
+                </div>
+                <div className="text-xs text-slate-500 font-medium mt-0.5">
+                  3 Occupied &bull; 6 Total Bays
                 </div>
                 <div className="mt-2.5 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                  <div className="h-full bg-amber-500 rounded-full" style={{ width: '66%' }} />
+                  <div className="h-full bg-amber-500 rounded-full" style={{ width: '50%' }} />
                 </div>
               </div>
 
-              {/* Ward 4: Private Ward */}
+              {/* Ward 5: Pediatrics */}
               <div 
-                onClick={() => setSelectedWardFilter('Private Ward')}
+                onClick={() => setSelectedWardFilter(selectedWardFilter === 'Pediatrics' ? 'All Wards' : 'Pediatrics')}
                 className={`p-4 rounded-2xl border transition-all cursor-pointer ${
-                  selectedWardFilter === 'Private Ward' 
-                    ? 'bg-blue-50 border-[#1A56DB] shadow-xs ring-2 ring-blue-200' 
+                  selectedWardFilter === 'Pediatrics' 
+                    ? 'bg-purple-50 border-purple-500 shadow-xs ring-2 ring-purple-200' 
                     : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <strong className="text-sm font-extrabold text-slate-900">Private Ward</strong>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-base">👶</span>
+                    <strong className="text-sm font-extrabold text-slate-900">Pediatrics & Maternity</strong>
+                  </div>
                   <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300">
-                    8 Available
+                    2 Available
                   </span>
                 </div>
-                <div className="text-xs text-slate-500 font-medium mt-1">
-                  32 Occupied &bull; 40 Total
+                <div className="text-[11px] text-purple-800 font-bold mt-1">
+                  குழந்தைகள் பிரிவு &bull; 👶 Pediatric Care
+                </div>
+                <div className="text-xs text-slate-500 font-medium mt-0.5">
+                  2 Occupied &bull; 4 Total Cots
                 </div>
                 <div className="mt-2.5 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
-                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: '80%' }} />
+                  <div className="h-full bg-purple-500 rounded-full" style={{ width: '50%' }} />
+                </div>
+              </div>
+
+              {/* Ward 6: Private Ward */}
+              <div 
+                onClick={() => setSelectedWardFilter(selectedWardFilter === 'Private Ward' ? 'All Wards' : 'Private Ward')}
+                className={`p-4 rounded-2xl border transition-all cursor-pointer ${
+                  selectedWardFilter === 'Private Ward' 
+                    ? 'bg-indigo-50 border-indigo-500 shadow-xs ring-2 ring-indigo-200' 
+                    : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-base">⭐</span>
+                    <strong className="text-sm font-extrabold text-slate-900">Private Deluxe Suites</strong>
+                  </div>
+                  <span className="px-2.5 py-0.5 rounded-full text-xs font-black bg-emerald-50 text-emerald-700 border border-emerald-300">
+                    2 Available
+                  </span>
+                </div>
+                <div className="text-[11px] text-indigo-800 font-bold mt-1">
+                  தனி வார்டு &bull; Executive En-suite Care
+                </div>
+                <div className="text-xs text-slate-500 font-medium mt-0.5">
+                  2 Occupied &bull; 4 Total Suites
+                </div>
+                <div className="mt-2.5 h-1.5 w-full bg-slate-200 rounded-full overflow-hidden">
+                  <div className="h-full bg-indigo-500 rounded-full" style={{ width: '50%' }} />
                 </div>
               </div>
 
@@ -4549,26 +5052,25 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
 
           {/* 
             ============================================================
-            IMAGE 3: VISUAL BED LAYOUT MATRIX GRID
-            - Green: Available (8)
-            - Blue: Occupied (16)
-            - Yellow: EVS Cleaning (6) (aprem cleaning nu irutha athuku thani color intha marii varanum)
-            - Purple: Discharging Soon (4) (discharge aga poragana athuku onu inthamari varanum)
-            - Red: Maintenance (2)
-            Hover tooltip showing Patient Name, Diagnosis, Expected Discharge!
+            IMAGE 3: VISUAL BED LAYOUT MATRIX GRID (SEAT-WISE, GENDER & PRIORITY)
+            - Seat Numbers: Seat #01 (Male), ICU Bay #01, Trauma Bay #01, etc.
+            - Gender badges: 👨 Male Ward (ஆண்கள்), 👩 Female Ward (பெண்கள்), 👶 Pediatric (குழந்தைகள்)
+            - Priority badges: 🔴 Critical Triage, 🟠 High Urgency, 🟢 Standard Routine
+            - Direct "Request Bed Hold / முன்பதிவு" button for available beds
+            - Hover tooltip showing patient, diagnosis, equipment
             ============================================================
           */}
           <div className="bg-white rounded-3xl p-6 sm:p-7 border border-slate-200/90 shadow-2xs space-y-5">
             
-            {/* Header & Filter Controls */}
+            {/* Header */}
             <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-100">
               <div>
                 <h3 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
                   <span>3. Visual Bed Layout Matrix Grid</span>
-                  <span className="text-xs text-slate-400 font-normal hidden sm:inline">(நேரடி படுக்கை வரைபடம்)</span>
+                  <span className="text-xs text-slate-400 font-normal hidden sm:inline">(நேரடி படுக்கை & இருக்கை வரைபடம்)</span>
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Click or hover any bed to inspect clinical equipment, patient status & discharge details
+                  Seat-wise priority & gender allocation map &bull; Click any bed card for telemetry dossier or request direct bed hold
                 </p>
               </div>
 
@@ -4647,28 +5149,157 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
               </div>
             </div>
 
+            {/* SECONDARY FILTER ROW: Gender & Priority Filters */}
+            <div className="bg-slate-50/80 p-3.5 rounded-2xl border border-slate-200/80 space-y-3 text-xs">
+              
+              {/* Gender Filter Row */}
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-slate-500 font-bold whitespace-nowrap min-w-[90px]">Gender Filter:</span>
+                <button
+                  onClick={() => setSelectedGenderFilter('all')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                    selectedGenderFilter === 'all'
+                      ? 'bg-slate-800 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  All Genders
+                </button>
+                <button
+                  onClick={() => setSelectedGenderFilter('Male')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedGenderFilter === 'Male'
+                      ? 'bg-sky-600 text-white shadow-2xs'
+                      : 'bg-sky-50 text-sky-800 border border-sky-200 hover:bg-sky-100'
+                  }`}
+                >
+                  <span>👨 Male Ward (ஆண்கள்)</span>
+                  <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-white/40">
+                    {visualBedList.filter(b => b.gender === 'Male').length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setSelectedGenderFilter('Female')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedGenderFilter === 'Female'
+                      ? 'bg-pink-600 text-white shadow-2xs'
+                      : 'bg-pink-50 text-pink-800 border border-pink-200 hover:bg-pink-100'
+                  }`}
+                >
+                  <span>👩 Female Ward (பெண்கள்)</span>
+                  <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-white/40">
+                    {visualBedList.filter(b => b.gender === 'Female').length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setSelectedGenderFilter('Pediatric')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedGenderFilter === 'Pediatric'
+                      ? 'bg-purple-600 text-white shadow-2xs'
+                      : 'bg-purple-50 text-purple-800 border border-purple-200 hover:bg-purple-100'
+                  }`}
+                >
+                  <span>👶 Pediatric (குழந்தைகள்)</span>
+                  <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-white/40">
+                    {visualBedList.filter(b => b.gender === 'Pediatric').length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setSelectedGenderFilter('General')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedGenderFilter === 'General'
+                      ? 'bg-slate-700 text-white shadow-2xs'
+                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                  }`}
+                >
+                  <span>🏥 General / Universal</span>
+                  <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-slate-100">
+                    {visualBedList.filter(b => b.gender === 'General').length}
+                  </span>
+                </button>
+              </div>
+
+              {/* Priority Filter Row */}
+              <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-200/60">
+                <span className="text-slate-500 font-bold whitespace-nowrap min-w-[90px]">Priority Triage:</span>
+                <button
+                  onClick={() => setSelectedPriorityFilter('all')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer ${
+                    selectedPriorityFilter === 'all'
+                      ? 'bg-slate-800 text-white shadow-2xs'
+                      : 'bg-white text-slate-600 hover:bg-slate-100 border border-slate-200'
+                  }`}
+                >
+                  All Priorities
+                </button>
+                <button
+                  onClick={() => setSelectedPriorityFilter('Critical Triage')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedPriorityFilter === 'Critical Triage'
+                      ? 'bg-rose-600 text-white shadow-2xs'
+                      : 'bg-rose-50 text-rose-800 border border-rose-200 hover:bg-rose-100'
+                  }`}
+                >
+                  <span className="w-2 h-2 rounded-full bg-rose-500 animate-ping" />
+                  <span>🔴 Critical Triage (உடனடி தீவிர சிகிச்சை)</span>
+                  <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-white/40">
+                    {visualBedList.filter(b => b.priority === 'Critical Triage').length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setSelectedPriorityFilter('High Urgency')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedPriorityFilter === 'High Urgency'
+                      ? 'bg-orange-600 text-white shadow-2xs'
+                      : 'bg-orange-50 text-orange-800 border border-orange-200 hover:bg-orange-100'
+                  }`}
+                >
+                  <span>🟠 High Urgency (அவசர பிரிவு)</span>
+                  <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-white/40">
+                    {visualBedList.filter(b => b.priority === 'High Urgency').length}
+                  </span>
+                </button>
+                <button
+                  onClick={() => setSelectedPriorityFilter('Standard Routine')}
+                  className={`px-3 py-1 rounded-lg font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                    selectedPriorityFilter === 'Standard Routine'
+                      ? 'bg-emerald-600 text-white shadow-2xs'
+                      : 'bg-emerald-50 text-emerald-800 border border-emerald-200 hover:bg-emerald-100'
+                  }`}
+                >
+                  <span>🟢 Standard Routine (வழக்கமான பிரிவு)</span>
+                  <span className="text-[10px] font-black px-1.5 py-0.2 rounded-full bg-white/40">
+                    {visualBedList.filter(b => b.priority === 'Standard Routine').length}
+                  </span>
+                </button>
+              </div>
+
+            </div>
+
             {/* Filter Sub-Bar: Ward Select & Search */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2 w-full sm:w-auto">
-                <span className="text-slate-400 font-bold whitespace-nowrap">Filter Ward:</span>
+                <span className="text-slate-500 font-bold whitespace-nowrap">Filter Ward:</span>
                 <select
                   value={selectedWardFilter}
                   onChange={(e) => setSelectedWardFilter(e.target.value as any)}
                   className="px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl font-bold text-slate-700 cursor-pointer focus:outline-none focus:ring-2 focus:ring-[#1A56DB]"
                 >
                   <option value="All Wards">All Wards (முழு வார்டுகள்)</option>
-                  <option value="General Ward">General Ward (பொது வார்டு)</option>
+                  <option value="Male Medical Ward">Male Medical Ward (ஆண்கள் பொது வார்டு)</option>
+                  <option value="Female Medical Ward">Female Medical Ward (பெண்கள் பொது வார்டு)</option>
                   <option value="ICU">ICU (தீவிர சிகிச்சைப் பிரிவு)</option>
-                  <option value="Emergency Ward">Emergency Ward (அவசர சிகிச்சை)</option>
+                  <option value="Emergency Ward">Emergency Ward (அவசர விபத்து சிகிச்சை)</option>
+                  <option value="Pediatrics">Pediatrics (குழந்தைகள் பிரிவு)</option>
                   <option value="Private Ward">Private Ward (தனி வார்டு)</option>
                 </select>
               </div>
 
-              <div className="relative w-full sm:w-64">
+              <div className="relative w-full sm:w-72">
                 <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   type="text"
-                  placeholder="Search bed ID or patient..."
+                  placeholder="Search seat #, bed ID, ward, patient, diagnosis..."
                   value={bedSearchQuery}
                   onChange={(e) => setBedSearchQuery(e.target.value)}
                   className="w-full pl-8 pr-3 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-[#1A56DB]"
@@ -4677,23 +5308,29 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
             </div>
 
             {/* 
-              THE INTERACTIVE BED MATRIX GRID (EXACTLY MATCHING IMAGE 3)
-              Renders color-coded bed cards:
-              - Green (Available): Bed 101, Bed 108...
-              - Blue (Occupied): J.D. 48h, A.S. 24h... (with hover tooltip)
-              - Yellow (EVS Cleaning): Bed 08, Bed 84, Bed 90, Bed 92, Bed 93...
-              - Purple (Discharging Soon): Bed 25, Bed 52, Bed 71...
-              - Red (Maintenance): Bed 116, Bed 120...
+              THE INTERACTIVE SEAT-WISE BED MATRIX GRID
+              Renders color-coded bed cards with:
+              - Seat Number & Bed Number
+              - Gender badge (👨 Male, 👩 Female, 👶 Pediatric, 🏥 General)
+              - Priority triage badge (🔴 Critical, 🟠 High Urgency, 🟢 Standard)
+              - Direct "Request Bed Hold / முன்பதிவு" button for available beds
+              - Rich hover popover
             */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3.5">
               {visualBedList
                 .filter(b => (selectedBedStatusFilter === 'all' ? true : b.status === selectedBedStatusFilter))
                 .filter(b => (selectedWardFilter === 'All Wards' ? true : b.ward === selectedWardFilter))
+                .filter(b => (selectedGenderFilter === 'all' ? true : b.gender === selectedGenderFilter))
+                .filter(b => (selectedPriorityFilter === 'all' ? true : b.priority === selectedPriorityFilter))
                 .filter(b => {
                   if (!bedSearchQuery) return true;
                   const q = bedSearchQuery.toLowerCase();
                   return (
                     b.bedNumber.toLowerCase().includes(q) ||
+                    b.seatNumber.toLowerCase().includes(q) ||
+                    b.ward.toLowerCase().includes(q) ||
+                    b.gender.toLowerCase().includes(q) ||
+                    b.priority.toLowerCase().includes(q) ||
                     (b.patientName && b.patientName.toLowerCase().includes(q)) ||
                     (b.diagnosis && b.diagnosis.toLowerCase().includes(q))
                   );
@@ -4707,7 +5344,7 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                       onClick={() => setSelectedBedForModal(bed)}
                       onMouseEnter={() => setHoveredBedId(bed.id)}
                       onMouseLeave={() => setHoveredBedId(null)}
-                      className={`relative p-3.5 rounded-2xl border-2 transition-all cursor-pointer text-left select-none group shadow-2xs hover:shadow-md ${
+                      className={`relative p-3.5 rounded-2xl border-2 transition-all cursor-pointer text-left select-none group shadow-2xs hover:shadow-lg flex flex-col justify-between ${
                         bed.status === 'available'
                           ? 'bg-[#EAFBF3] border-[#86E4B6] hover:border-emerald-500 text-emerald-950'
                           : bed.status === 'occupied'
@@ -4719,97 +5356,148 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                           : 'bg-[#FEECEC] border-[#FCA5A5] hover:border-rose-500 text-rose-950'
                       }`}
                     >
-                      {/* Top Header inside Bed Card */}
-                      <div className="flex items-center justify-between gap-1">
-                        <strong className="text-sm font-black font-mono tracking-tight block truncate">
-                          {bed.bedNumber}
-                        </strong>
+                      <div>
+                        {/* Top Header: Seat Number + Bed Number + Status Pill */}
+                        <div className="flex items-center justify-between gap-1 mb-2">
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span className="text-[11px] font-black px-2 py-0.5 rounded-lg bg-slate-900 text-white font-mono shadow-2xs">
+                              {bed.seatNumber}
+                            </span>
+                            <span className="text-[10px] font-bold text-slate-600 font-mono">
+                              {bed.bedNumber}
+                            </span>
+                          </div>
 
-                        {/* Stay Duration / ETA Pill */}
-                        {bed.status === 'occupied' && bed.hoursStay && (
-                          <span className="text-[10px] font-black text-blue-700 bg-white/60 px-1.5 py-0.2 rounded-md">
-                            {bed.hoursStay}
-                          </span>
-                        )}
+                          {bed.status === 'occupied' && bed.hoursStay && (
+                            <span className="text-[10px] font-black text-blue-700 bg-white/70 px-1.5 py-0.5 rounded-md border border-blue-200">
+                              {bed.hoursStay}
+                            </span>
+                          )}
+                          {bed.status === 'discharging' && (
+                            <span className="text-[10px] font-black text-purple-700 bg-white/80 px-1.5 py-0.5 rounded-md border border-purple-200">
+                              Discharge
+                            </span>
+                          )}
+                          {bed.status === 'cleaning' && (
+                            <span className="text-[10px] font-black text-amber-800 bg-white/80 px-1.5 py-0.5 rounded-md border border-amber-200">
+                              EVS
+                            </span>
+                          )}
+                          {bed.status === 'maintenance' && (
+                            <span className="text-[10px] font-black text-rose-800 bg-white/80 px-1.5 py-0.5 rounded-md border border-rose-200">
+                              Blocked
+                            </span>
+                          )}
+                        </div>
 
-                        {bed.status === 'discharging' && (
-                          <span className="text-[10px] font-black text-purple-700 bg-white/70 px-1.5 py-0.2 rounded-md">
-                            Discharge
+                        {/* Gender & Priority Badges */}
+                        <div className="flex items-center gap-1 flex-wrap mb-2">
+                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-1 ${
+                            bed.gender === 'Male' ? 'bg-sky-100 text-sky-800 border border-sky-300' :
+                            bed.gender === 'Female' ? 'bg-pink-100 text-pink-800 border border-pink-300' :
+                            bed.gender === 'Pediatric' ? 'bg-purple-100 text-purple-800 border border-purple-300' :
+                            'bg-slate-100 text-slate-700 border border-slate-300'
+                          }`}>
+                            {bed.gender === 'Male' && '👨 Male'}
+                            {bed.gender === 'Female' && '👩 Female'}
+                            {bed.gender === 'Pediatric' && '👶 Pedia'}
+                            {bed.gender === 'General' && '🏥 General'}
                           </span>
-                        )}
 
-                        {bed.status === 'cleaning' && (
-                          <span className="text-[10px] font-black text-amber-800 bg-white/70 px-1.5 py-0.2 rounded-md">
-                            EVS
+                          <span className={`text-[9px] font-black px-1.5 py-0.5 rounded-md flex items-center gap-1 ${
+                            bed.priority === 'Critical Triage' ? 'bg-rose-100 text-rose-800 border border-rose-300 font-extrabold' :
+                            bed.priority === 'High Urgency' ? 'bg-orange-100 text-orange-800 border border-orange-300' :
+                            'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                          }`}>
+                            {bed.priority === 'Critical Triage' && '🔴 Critical'}
+                            {bed.priority === 'High Urgency' && '🟠 Urgency'}
+                            {bed.priority === 'Standard Routine' && '🟢 Standard'}
                           </span>
+                        </div>
+
+                        {/* Ward and Floor */}
+                        <div className="text-[11px] font-bold text-slate-800 truncate mb-0.5">
+                          {bed.ward}
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-medium truncate mb-2">
+                          {bed.floor}
+                        </div>
+
+                        {/* Equipment / O2 indicators */}
+                        <div className="flex items-center gap-1 text-[10px] text-slate-600 mb-2">
+                          {bed.oxygenReady && (
+                            <span className="flex items-center gap-0.5 text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded border border-blue-200 font-bold shrink-0">
+                              💨 O2
+                            </span>
+                          )}
+                          {bed.equipment && bed.equipment.length > 0 && (
+                            <span className="text-slate-500 font-medium truncate">
+                              {bed.equipment[0]}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Bottom Action / Status Container */}
+                      <div>
+                        {bed.status === 'available' ? (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setBedAdmissionRequestSent(`Bed Admission Hold Reserved: ${bed.seatNumber} (${bed.bedNumber}) in ${bed.ward}. Triage Urgency: ${bed.priority}. Logged to your patient admission token!`);
+                              setTimeout(() => setBedAdmissionRequestSent(null), 8000);
+                            }}
+                            className="w-full mt-2 py-1.5 px-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white text-[11px] font-black transition-all cursor-pointer shadow-xs flex items-center justify-center gap-1 active:scale-98"
+                          >
+                            <Bed className="w-3.5 h-3.5 text-emerald-100" />
+                            <span>Request Bed Hold (முன்பதிவு)</span>
+                          </button>
+                        ) : bed.status === 'occupied' ? (
+                          <div className="mt-2 text-[10px] text-blue-900 bg-white/70 p-1.5 rounded-xl border border-blue-100 space-y-0.5">
+                            <div className="font-extrabold truncate">Patient: {bed.patientName || 'In-Patient'}</div>
+                            {bed.diagnosis && <div className="text-[9px] text-blue-700 truncate">{bed.diagnosis}</div>}
+                          </div>
+                        ) : bed.status === 'cleaning' ? (
+                          <div className="mt-2 text-[10px] text-amber-900 bg-white/70 p-1.5 rounded-xl border border-amber-100 font-bold flex items-center gap-1">
+                            <Sparkles className="w-3 h-3 text-amber-500 animate-spin" />
+                            <span>EVS Sanitizing: {bed.evsMinutes || '15m'}</span>
+                          </div>
+                        ) : bed.status === 'discharging' ? (
+                          <div className="mt-2 text-[10px] text-purple-900 bg-white/70 p-1.5 rounded-xl border border-purple-100 font-bold flex items-center gap-1">
+                            <DoorOpen className="w-3 h-3 text-purple-500" />
+                            <span>Discharge Soon</span>
+                          </div>
+                        ) : (
+                          <div className="mt-2 text-[10px] text-rose-900 bg-white/70 p-1.5 rounded-xl border border-rose-100 font-bold flex items-center gap-1">
+                            <Wrench className="w-3 h-3 text-rose-500" />
+                            <span>Biomedical Tagged</span>
+                          </div>
                         )}
                       </div>
 
-                      {/* Status Descriptor with Icon Matching User Image 3 */}
-                      <div className="mt-2 flex items-center gap-1.5 text-xs">
-                        {bed.status === 'available' && (
-                          <>
-                            <Bed className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                            <span className="text-[11px] font-bold text-emerald-800">Available</span>
-                          </>
-                        )}
-
-                        {bed.status === 'occupied' && (
-                          <>
-                            <Clock className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                            <span className="text-[11px] font-semibold text-blue-900 truncate">
-                              {bed.patientName || 'Occupied'}
-                            </span>
-                          </>
-                        )}
-
-                        {bed.status === 'cleaning' && (
-                          <>
-                            <Sparkles className="w-3.5 h-3.5 text-amber-600 shrink-0" />
-                            <span className="text-[11px] font-extrabold text-amber-900">
-                              EVS: {bed.evsMinutes || '15m'}
-                            </span>
-                          </>
-                        )}
-
-                        {bed.status === 'discharging' && (
-                          <>
-                            <DoorOpen className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                            <span className="text-[11px] font-extrabold text-purple-900">
-                              Discharge: 1h
-                            </span>
-                          </>
-                        )}
-
-                        {bed.status === 'maintenance' && (
-                          <>
-                            <Wrench className="w-3.5 h-3.5 text-rose-600 shrink-0" />
-                            <span className="text-[11px] font-extrabold text-rose-900">Maintenance</span>
-                          </>
-                        )}
-                      </div>
-
-                      {/* 
-                        IMAGE 3: HOVER TOOLTIP POPOVER
-                        Shows: Patient: Jane Doe, Diagnosis: Pneumonia, Expected Discharge: Today, 2 PM
-                      */}
-                      {isHovered && (bed.status === 'occupied' || bed.status === 'discharging') && (
-                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-56 p-3 bg-slate-900/95 text-white rounded-2xl shadow-xl z-30 pointer-events-none text-xs space-y-1 animate-in fade-in zoom-in-95 duration-150">
-                          <div className="text-[10px] font-black uppercase text-blue-300">
-                            {bed.bedNumber} &bull; {bed.ward}
+                      {/* HOVER TOOLTIP POPOVER */}
+                      {isHovered && (
+                        <div className="absolute left-1/2 -translate-x-1/2 bottom-full mb-2 w-64 p-3 bg-slate-900/95 text-white rounded-2xl shadow-2xl z-30 pointer-events-none text-xs space-y-1.5 animate-in fade-in zoom-in-95 duration-150">
+                          <div className="text-[10px] font-black uppercase text-blue-300 flex items-center justify-between">
+                            <span>{bed.seatNumber} &bull; {bed.bedNumber}</span>
+                            <span>{bed.priority}</span>
                           </div>
-                          <div className="font-extrabold text-white">
-                            Patient: {bed.patientName}
+                          <div className="text-sm font-bold text-white">
+                            {bed.ward} &bull; {bed.floor}
                           </div>
-                          {bed.diagnosis && (
-                            <div className="text-slate-300 text-[11px]">
-                              Diagnosis: {bed.diagnosis}
+                          <div className="text-[11px] text-slate-300">
+                            Gender: <strong className="text-white">{bed.gender}</strong>
+                          </div>
+                          {bed.patientName && (
+                            <div className="pt-1 border-t border-slate-700 text-[11px] text-blue-200">
+                              Patient: <strong className="text-white">{bed.patientName}</strong>
+                              {bed.diagnosis && <div>Diagnosis: {bed.diagnosis}</div>}
+                              {bed.expectedDischarge && <div>Expected Discharge: {bed.expectedDischarge}</div>}
                             </div>
                           )}
-                          {bed.expectedDischarge && (
-                            <div className="text-emerald-300 font-bold text-[11px] pt-1 border-t border-white/10 flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              <span>Expected Discharge: {bed.expectedDischarge}</span>
+                          {bed.equipment && bed.equipment.length > 0 && (
+                            <div className="pt-1 border-t border-slate-700 text-[10px] text-slate-400">
+                              Equipment: {bed.equipment.join(', ')}
                             </div>
                           )}
                         </div>
@@ -4819,39 +5507,34 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                 })}
             </div>
 
-            {/* 
-              IMAGE 3: COLOR LEGEND FOOTER (BOTTOM RIGHT STRIP)
-              Green: Available (8) | Blue: Occupied (16) | Yellow: EVS Cleaning (6) | Purple: Discharging (4) | Red: Maintenance (2)
-            */}
-            <div className="mt-4 pt-3.5 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="text-slate-500 font-medium">
-                Live Bed Map &bull; Total {visualBedList.length} Beds Monitored
-              </div>
-
-              <div className="flex items-center gap-3.5 flex-wrap font-bold text-[11px]">
-                <div className="flex items-center gap-1.5 text-emerald-800">
-                  <span className="w-3 h-3 rounded-md bg-[#86E4B6] border border-emerald-400 inline-block" />
-                  <span>Green: Available (8)</span>
+            {/* Bottom Status Legend */}
+            <div className="pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3 text-xs font-bold text-slate-600">
+              <span className="text-slate-400">Live Bed Map &bull; Total {visualBedList.length} Beds / Seats Monitored</span>
+              
+              <div className="flex items-center gap-4 flex-wrap text-xs">
+                <div className="flex items-center gap-1.5 text-emerald-900">
+                  <span className="w-3 h-3 rounded-md bg-[#86E4B6] border border-emerald-500 inline-block" />
+                  <span>Green: Available ({visualBedList.filter(b => b.status === 'available').length})</span>
                 </div>
 
                 <div className="flex items-center gap-1.5 text-blue-900">
                   <span className="w-3 h-3 rounded-md bg-[#A8CEFD] border border-blue-400 inline-block" />
-                  <span>Blue: Occupied (16)</span>
+                  <span>Blue: Occupied ({visualBedList.filter(b => b.status === 'occupied').length})</span>
                 </div>
 
                 <div className="flex items-center gap-1.5 text-amber-900">
                   <span className="w-3 h-3 rounded-md bg-[#FCE19B] border border-amber-400 inline-block" />
-                  <span>Yellow: EVS Cleaning (6)</span>
+                  <span>Yellow: EVS Cleaning ({visualBedList.filter(b => b.status === 'cleaning').length})</span>
                 </div>
 
                 <div className="flex items-center gap-1.5 text-purple-900">
                   <span className="w-3 h-3 rounded-md bg-[#D6AEFD] border border-purple-400 inline-block" />
-                  <span>Purple: Discharging Soon (4)</span>
+                  <span>Purple: Discharging Soon ({visualBedList.filter(b => b.status === 'discharging').length})</span>
                 </div>
 
                 <div className="flex items-center gap-1.5 text-rose-900">
                   <span className="w-3 h-3 rounded-md bg-[#FCA5A5] border border-rose-400 inline-block" />
-                  <span>Red: Maintenance (2)</span>
+                  <span>Red: Maintenance ({visualBedList.filter(b => b.status === 'maintenance').length})</span>
                 </div>
               </div>
             </div>
@@ -5396,11 +6079,21 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
                       <Bed className="w-5 h-5" />
                     </div>
                     <div>
-                      <h3 className="text-base sm:text-lg font-black text-slate-900">
-                        {selectedBedForModal.bedNumber} &mdash; Bed Telemetry Dossier
+                      <h3 className="text-base sm:text-lg font-black text-slate-900 flex items-center gap-2">
+                        <span className="px-2.5 py-0.5 rounded-lg bg-slate-900 text-white font-mono text-sm">{selectedBedForModal.seatNumber}</span>
+                        <span>{selectedBedForModal.bedNumber}</span>
                       </h3>
-                      <div className="text-xs text-slate-500">
-                        {selectedBedForModal.ward} &bull; {selectedBedForModal.floor} &bull; {currentHospital.name}
+                      <div className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5 flex-wrap">
+                        <span className="font-bold text-slate-700">{selectedBedForModal.ward}</span>
+                        <span>&bull;</span>
+                        <span>{selectedBedForModal.floor}</span>
+                        <span>&bull;</span>
+                        <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 font-bold border border-blue-200 text-[10px]">
+                          {selectedBedForModal.gender === 'Male' ? '👨 Male Ward' : selectedBedForModal.gender === 'Female' ? '👩 Female Ward' : selectedBedForModal.gender === 'Pediatric' ? '👶 Pediatric' : '🏥 General'}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-orange-50 text-orange-800 font-bold border border-orange-200 text-[10px]">
+                          {selectedBedForModal.priority}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -6071,6 +6764,61 @@ export const PatientDashboard: React.FC<PatientDashboardProps> = ({
             hospitalName={currentHospital.name}
             onNavigateToBooking={handleGoToAppointments}
             onNavigateToQueue={handleGoToQueue}
+            livePatientName={patientName}
+            livePatientAge={patientAge}
+            liveBloodGroup={bloodGroup}
+            liveAppointments={[
+              ...(activeToken ? [{
+                id: activeToken.requestId || activeToken.tokenNumber,
+                tokenNumber: activeToken.tokenNumber,
+                date: activeToken.date,
+                timeSlot: activeToken.timeSlot,
+                department: activeToken.department,
+                doctorName: activeToken.doctorName,
+                purpose: activeToken.purpose,
+                symptomsDescription: activeToken.symptomsDescription,
+                status: activeToken.status === 'In Queue' ? 'Accepted' : activeToken.status,
+                declineReason: activeToken.declineReason,
+                hospitalName: activeToken.hospitalName
+              }] : []),
+              ...patientRequestsHistory
+                .filter(r => !activeToken || (r.requestId !== activeToken.requestId && r.tokenNumber !== activeToken.tokenNumber))
+                .map(r => ({
+                  id: r.requestId || r.tokenNumber,
+                  tokenNumber: r.tokenNumber,
+                  date: r.date,
+                  timeSlot: r.timeSlot,
+                  department: r.department,
+                  doctorName: r.doctorName,
+                  purpose: r.purpose,
+                  symptomsDescription: r.symptomsDescription,
+                  status: r.status === 'In Queue' ? 'Accepted' : r.status,
+                  declineReason: r.declineReason,
+                  hospitalName: r.hospitalName
+                })),
+              ...pastHistoryList.map(v => ({
+                id: v.id,
+                tokenNumber: v.tokenNumber,
+                date: v.date,
+                timeSlot: v.timeSlot,
+                department: v.department,
+                doctorName: v.doctorName,
+                purpose: v.complaint,
+                status: 'Completed',
+                hospitalName: currentHospital.name
+              })),
+              ...cancelledList.map(c => ({
+                id: c.id,
+                tokenNumber: c.tokenNumber,
+                date: c.originalDate,
+                timeSlot: c.originalTime,
+                department: c.department,
+                doctorName: c.doctorName,
+                purpose: c.reason,
+                status: 'Cancelled',
+                hospitalName: currentHospital.name
+              }))
+            ]}
           />
 
         </div>

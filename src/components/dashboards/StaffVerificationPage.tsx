@@ -30,6 +30,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 import { Card } from '../common/Card';
 import { Badge } from '../common/Badge';
 import { Button } from '../common/Button';
@@ -69,7 +70,7 @@ export const StaffVerificationPage: React.FC<StaffVerificationPageProps> = ({ on
   // 1. Staff Records State (Persistent via localStorage)
   const [staffList, setStaffList] = useState<StaffMember[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -83,7 +84,7 @@ export const StaffVerificationPage: React.FC<StaffVerificationPageProps> = ({ on
   const saveStaffList = (newList: StaffMember[]) => {
     setStaffList(newList);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newList));
+      localStorage.setItem(hospitalScopedKey(STORAGE_KEY), JSON.stringify(newList));
     } catch (e) {
       console.error('Failed to save staff verification data to localStorage:', e);
     }
@@ -187,7 +188,7 @@ export const StaffVerificationPage: React.FC<StaffVerificationPageProps> = ({ on
     setIsRefreshing(true);
     setTimeout(() => {
       try {
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
         if (saved) setStaffList(JSON.parse(saved));
       } catch {}
       const now = new Date();

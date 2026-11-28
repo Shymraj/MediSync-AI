@@ -34,9 +34,10 @@ interface MediSyncAdminDashboardProps {
 }
 
 // Initial fallback seed data (Tamil Nadu Healthcare Network)
-const SEED_HOSPITALS: RegisteredHospitalRecord[] = [
+export const SEED_HOSPITALS: RegisteredHospitalRecord[] = [
   {
     id: 'reg-001',
+    hospitalId: 'Hos_Id-101',
     hospitalName: 'Rajiv Gandhi Government General Hospital (RGGGH)',
     hospitalType: 'Government Teaching Hospital',
     registrationNumber: 'TN-MED-REG-2026-8941',
@@ -61,6 +62,7 @@ const SEED_HOSPITALS: RegisteredHospitalRecord[] = [
   },
   {
     id: 'reg-002',
+    hospitalId: 'Hos_Id-204',
     hospitalName: 'Madurai Medical College & Government Rajaji Hospital',
     hospitalType: 'District Headquarter Hospital',
     registrationNumber: 'TN-MED-REG-2026-4412',
@@ -85,6 +87,7 @@ const SEED_HOSPITALS: RegisteredHospitalRecord[] = [
   },
   {
     id: 'reg-003',
+    hospitalId: 'Hos_Id-308',
     hospitalName: 'Coimbatore Medical College Hospital (CMCH)',
     hospitalType: 'Government Teaching Hospital',
     registrationNumber: 'TN-MED-REG-2026-7721',
@@ -109,6 +112,7 @@ const SEED_HOSPITALS: RegisteredHospitalRecord[] = [
   },
   {
     id: 'reg-004',
+    hospitalId: 'Hos_Id-412',
     hospitalName: 'Apollo Speciality Hospital (Greams Road)',
     hospitalType: 'Private Super Speciality Hospital',
     registrationNumber: 'TN-PVT-REG-2026-1029',
@@ -133,7 +137,7 @@ const SEED_HOSPITALS: RegisteredHospitalRecord[] = [
   }
 ];
 
-const LOCAL_STORAGE_KEY = 'medisync_registered_hospitals_cache';
+export const LOCAL_STORAGE_KEY = 'medisync_registered_hospitals_cache';
 
 export const MediSyncAdminDashboard: React.FC<MediSyncAdminDashboardProps> = ({
   onLogout
@@ -143,7 +147,16 @@ export const MediSyncAdminDashboard: React.FC<MediSyncAdminDashboardProps> = ({
       const cached = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (cached) {
         const parsed = JSON.parse(cached);
-        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const normalized = parsed.map((item: RegisteredHospitalRecord, idx: number) => {
+            if (item.hospitalId && item.hospitalId.startsWith('Hos_Id-')) return item;
+            const seedMatch = SEED_HOSPITALS.find(s => s.id === item.id || s.registrationNumber === item.registrationNumber);
+            const fallbackId = seedMatch?.hospitalId || `Hos_Id-${300 + ((idx * 47 + (item.hospitalName?.length || 5) * 13) % 699)}`;
+            return { ...item, hospitalId: fallbackId };
+          });
+          localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(normalized));
+          return normalized;
+        }
       }
     } catch {}
     return SEED_HOSPITALS;
@@ -214,6 +227,7 @@ export const MediSyncAdminDashboard: React.FC<MediSyncAdminDashboardProps> = ({
     const matchesSearch = 
       h.hospitalName.toLowerCase().includes(searchTerm.toLowerCase()) ||
       h.districtName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      (h.hospitalId && h.hospitalId.toLowerCase().includes(searchTerm.toLowerCase())) ||
       h.registrationNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
       h.hospitalAddress.toLowerCase().includes(searchTerm.toLowerCase());
 
@@ -525,9 +539,14 @@ export const MediSyncAdminDashboard: React.FC<MediSyncAdminDashboardProps> = ({
                           </div>
                           <div className="min-w-0">
                             <span className="font-bold text-slate-900 block truncate max-w-xs">{h.hospitalName}</span>
-                            <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded mt-0.5 inline-block">
-                              {h.registrationNumber}
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap mt-0.5">
+                              <span className="text-[10px] font-mono font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded">
+                                {h.hospitalId || h.id}
+                              </span>
+                              <span className="text-[10px] font-mono font-bold text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded">
+                                {h.registrationNumber}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -627,8 +646,13 @@ export const MediSyncAdminDashboard: React.FC<MediSyncAdminDashboardProps> = ({
                     {h.hospitalName}
                   </h3>
 
-                  <div className="text-[11px] font-mono text-blue-700 font-bold mt-1">
-                    {h.registrationNumber}
+                  <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                    <span className="text-[11px] font-mono font-black text-emerald-800 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                      {h.hospitalId || h.id}
+                    </span>
+                    <span className="text-[11px] font-mono text-blue-700 font-bold">
+                      {h.registrationNumber}
+                    </span>
                   </div>
 
                   <div className="mt-3 space-y-1.5 text-xs text-slate-600 border-t border-slate-100 pt-3">
@@ -686,6 +710,9 @@ export const MediSyncAdminDashboard: React.FC<MediSyncAdminDashboardProps> = ({
                   <div className="flex items-center gap-2">
                     <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider bg-blue-100 text-[#1A56DB]">
                       {selectedHospital.ownership}
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-black bg-slate-900 text-white">
+                      {selectedHospital.hospitalId || selectedHospital.id}
                     </span>
                     <span className="px-2 py-0.5 rounded-full text-[9px] font-extrabold uppercase tracking-wider bg-emerald-100 text-emerald-800">
                       {selectedHospital.status}

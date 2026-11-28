@@ -46,6 +46,7 @@ import {
   ResourceItem, 
   ResourceCategory 
 } from '../../data/resourceDemoData';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 
 const REQUESTS_STORAGE_KEY = 'medisync_resource_requests_data';
 const RESOURCES_STORAGE_KEY = 'medisync_resource_registry_data';
@@ -89,7 +90,7 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
   // 1. Live Requests State with localStorage persistence
   const [requests, setRequests] = useState<ResourceRequestItem[]>(() => {
     try {
-      const saved = localStorage.getItem(REQUESTS_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(REQUESTS_STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -103,7 +104,7 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
   // 2. Shared Resource Registry State (for stock validation & allocation deduction)
   const [registryResources, setRegistryResources] = useState<ResourceItem[]>(() => {
     try {
-      const saved = localStorage.getItem(RESOURCES_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(RESOURCES_STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -118,7 +119,7 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
   const saveRequests = (newRequests: ResourceRequestItem[]) => {
     setRequests(newRequests);
     try {
-      localStorage.setItem(REQUESTS_STORAGE_KEY, JSON.stringify(newRequests));
+      localStorage.setItem(hospitalScopedKey(REQUESTS_STORAGE_KEY), JSON.stringify(newRequests));
       window.dispatchEvent(new CustomEvent('medisync_hospital_data_updated', { detail: { type: 'requests_updated' } }));
     } catch (e) {
       console.error('Failed to save requests:', e);
@@ -129,7 +130,7 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
   useEffect(() => {
     const handleSync = () => {
       try {
-        const saved = localStorage.getItem(REQUESTS_STORAGE_KEY);
+        const saved = localStorage.getItem(hospitalScopedKey(REQUESTS_STORAGE_KEY));
         if (saved) {
           const parsed = JSON.parse(saved);
           if (Array.isArray(parsed) && parsed.length > 0) setRequests(parsed);
@@ -148,7 +149,7 @@ export const ResourceRequestsPage: React.FC<ResourceRequestsPageProps> = ({ onSe
   const saveRegistryResources = (newResources: ResourceItem[]) => {
     setRegistryResources(newResources);
     try {
-      localStorage.setItem(RESOURCES_STORAGE_KEY, JSON.stringify(newResources));
+      localStorage.setItem(hospitalScopedKey(RESOURCES_STORAGE_KEY), JSON.stringify(newResources));
     } catch (e) {
       console.error('Failed to save resources:', e);
     }

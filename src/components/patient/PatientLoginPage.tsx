@@ -32,21 +32,54 @@ export const PatientLoginPage: React.FC<PatientLoginPageProps> = ({
   const [loggedInName, setLoggedInName] = useState('Karthik Subramanian');
   const [loggedInEmail, setLoggedInEmail] = useState('karthik.subramanian@gmail.com');
 
+  // Custom / "Use another Google account" state
+  const [showAddGoogleAccount, setShowAddGoogleAccount] = useState(false);
+  const [customGoogleEmail, setCustomGoogleEmail] = useState('');
+  const [customGoogleName, setCustomGoogleName] = useState('');
+  const [savedGoogleAccounts, setSavedGoogleAccounts] = useState<Array<{ name: string; email: string; avatar?: string }>>(() => {
+    const defaultAcc = {
+      name: 'Karthik Subramanian',
+      email: 'karthik.subramanian@gmail.com',
+      avatar: 'https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=120&q=80'
+    };
+    try {
+      const stored = localStorage.getItem('medisync_patient_google_accounts');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+      }
+    } catch {}
+    return [defaultAcc];
+  });
+
+  const deriveNameFromEmail = (rawEmail: string) => {
+    if (rawEmail.toLowerCase() === 'karthik.subramanian@gmail.com') return 'Karthik Subramanian';
+    const localPart = rawEmail.split('@')[0] || 'Patient User';
+    return localPart
+      .replace(/[._-]+/g, ' ')
+      .split(' ')
+      .filter(Boolean)
+      .map(w => w.charAt(0).toUpperCase() + w.slice(1))
+      .join(' ');
+  };
+
   // Direct Email / Password Login
   const handleEmailPasswordSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setIsLoading(true);
 
+    const targetEmail = email.trim() || 'karthik.subramanian@gmail.com';
+    const derivedName = deriveNameFromEmail(targetEmail);
+
     try {
-      // Direct login as verified patient
       const userRes = await loginWithGoogle(
-        email.trim() || 'karthik.subramanian@gmail.com',
-        'Karthik Subramanian',
+        targetEmail,
+        derivedName,
         'patient'
       );
-      setLoggedInName(userRes?.name || 'Karthik Subramanian');
-      setLoggedInEmail(userRes?.email || email.trim() || 'karthik.subramanian@gmail.com');
+      setLoggedInName(userRes?.name || derivedName);
+      setLoggedInEmail(userRes?.email || targetEmail);
       setIsLoading(false);
       setShowSuccessModal(true);
       setTimeout(() => {
@@ -61,22 +94,33 @@ export const PatientLoginPage: React.FC<PatientLoginPageProps> = ({
   // Google SSO Login Flow
   const handleGoogleLoginClick = () => {
     setError(null);
+    setShowAddGoogleAccount(false);
     setIsGoogleModalOpen(true);
   };
 
-  const handleSelectGoogleAccount = async () => {
+  const handleSelectGoogleAccount = async (targetEmail: string, targetName: string) => {
     setIsLoading(true);
     setError(null);
     try {
-      const userRes = await loginWithGoogle(
-        'karthik.subramanian@gmail.com',
-        'Karthik Subramanian',
-        'patient'
-      );
-      setLoggedInName(userRes?.name || 'Karthik Subramanian');
-      setLoggedInEmail(userRes?.email || 'karthik.subramanian@gmail.com');
+      const cleanEmail = targetEmail.trim();
+      const cleanName = targetName.trim() || deriveNameFromEmail(cleanEmail);
+      const userRes = await loginWithGoogle(cleanEmail, cleanName, 'patient');
+
+      // Save account in quick picker if new
+      setSavedGoogleAccounts(prev => {
+        const exists = prev.some(a => a.email.toLowerCase() === cleanEmail.toLowerCase());
+        const next = exists ? prev : [...prev, { name: cleanName, email: cleanEmail }];
+        try {
+          localStorage.setItem('medisync_patient_google_accounts', JSON.stringify(next));
+        } catch {}
+        return next;
+      });
+
+      setLoggedInName(userRes?.name || cleanName);
+      setLoggedInEmail(userRes?.email || cleanEmail);
       setIsLoading(false);
       setIsGoogleModalOpen(false);
+      setShowAddGoogleAccount(false);
       setShowSuccessModal(true);
       setTimeout(() => {
         onSuccess();
@@ -85,6 +129,17 @@ export const PatientLoginPage: React.FC<PatientLoginPageProps> = ({
       setIsLoading(false);
       setError(err?.message || 'Google authentication failed.');
     }
+  };
+
+  const handleCustomGoogleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    const cleanEmail = customGoogleEmail.trim();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setError('Please enter a valid Google email address.');
+      return;
+    }
+    const cleanName = customGoogleName.trim() || deriveNameFromEmail(cleanEmail);
+    handleSelectGoogleAccount(cleanEmail, cleanName);
   };
 
   return (
@@ -325,26 +380,99 @@ export const PatientLoginPage: React.FC<PatientLoginPageProps> = ({
               Choose a Google account to continue to <strong>MediSync AI Patient Portal</strong>
             </p>
 
-            {/* Verified Patient Google Account Card */}
-            <div 
-              onClick={handleSelectGoogleAccount}
-              className="p-3.5 rounded-2xl border-2 border-blue-500 bg-blue-50/40 hover:bg-blue-50 transition-all cursor-pointer flex items-center justify-between mb-3 shadow-2xs"
-            >
-              <div className="flex items-center gap-3">
-                <img
-                  src="https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=120&q=80"
-                  alt="Karthik Subramanian"
-                  className="w-10 h-10 rounded-full border border-slate-300 object-cover"
-                />
-                <div className="text-left">
-                  <div className="text-xs font-bold text-slate-900">Karthik Subramanian</div>
-                  <div className="text-[11px] text-slate-500">karthik.subramanian@gmail.com</div>
-                  <div className="text-[9px] font-semibold text-emerald-700 flex items-center gap-1 mt-0.5">
-                    <ShieldCheck className="w-3 h-3" /> Verified Patient Account
+            {/* Saved Google Accounts List */}
+            <div className="space-y-2.5 max-h-56 overflow-y-auto mb-3 pr-0.5">
+              {savedGoogleAccounts.map((acc) => (
+                <div
+                  key={acc.email}
+                  onClick={() => handleSelectGoogleAccount(acc.email, acc.name)}
+                  className="p-3.5 rounded-2xl border border-slate-200 hover:border-blue-500 bg-slate-50/60 hover:bg-blue-50/50 transition-all cursor-pointer flex items-center justify-between shadow-2xs group"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    {acc.avatar ? (
+                      <img
+                        src={acc.avatar}
+                        alt={acc.name}
+                        className="w-10 h-10 rounded-full border border-slate-300 object-cover shrink-0"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 text-white font-bold text-sm flex items-center justify-center shrink-0">
+                        {acc.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="text-left min-w-0">
+                      <div className="text-xs font-bold text-slate-900 truncate group-hover:text-blue-700">{acc.name}</div>
+                      <div className="text-[11px] text-slate-500 truncate">{acc.email}</div>
+                      <div className="text-[9px] font-semibold text-emerald-700 flex items-center gap-1 mt-0.5">
+                        <ShieldCheck className="w-3 h-3" /> Verified Google Account
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ))}
             </div>
+
+            {/* Use Another Google Account Option */}
+            {!showAddGoogleAccount ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setError(null);
+                  setShowAddGoogleAccount(true);
+                }}
+                className="w-full p-3 rounded-2xl border border-dashed border-slate-300 hover:border-blue-500 hover:bg-blue-50/30 transition-all cursor-pointer flex items-center gap-3 text-left text-xs font-semibold text-slate-700"
+              >
+                <div className="w-9 h-9 rounded-full bg-slate-100 flex items-center justify-center text-slate-600 shrink-0">
+                  <User className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="font-bold text-slate-800">Use another Google account</div>
+                  <div className="text-[10px] text-slate-500">மற்றொரு Gmail / Google கணக்கு மூலம் உள்நுழைய</div>
+                </div>
+              </button>
+            ) : (
+              <form onSubmit={handleCustomGoogleSubmit} className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 space-y-2.5 text-left">
+                <div className="text-xs font-bold text-slate-800">Sign in with your Google Account</div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Google Email Address *</label>
+                  <input
+                    type="email"
+                    value={customGoogleEmail}
+                    onChange={(e) => setCustomGoogleEmail(e.target.value)}
+                    placeholder="yourname@gmail.com"
+                    required
+                    autoFocus
+                    className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-800"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">Full Name (Optional)</label>
+                  <input
+                    type="text"
+                    value={customGoogleName}
+                    onChange={(e) => setCustomGoogleName(e.target.value)}
+                    placeholder="e.g. Muralitharan M"
+                    className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium text-slate-800"
+                  />
+                </div>
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => setShowAddGoogleAccount(false)}
+                    className="px-3 py-1.5 rounded-xl border border-slate-300 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={isLoading}
+                    className="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-[11px] font-bold cursor-pointer shadow-xs disabled:opacity-50"
+                  >
+                    {isLoading ? 'Signing in...' : 'Continue with Google'}
+                  </button>
+                </div>
+              </form>
+            )}
 
             {/* Security note */}
             <div className="text-[10px] text-slate-400 text-center mt-3 pt-2 border-t border-slate-100 flex items-center justify-center gap-1">

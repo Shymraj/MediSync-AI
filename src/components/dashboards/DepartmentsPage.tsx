@@ -41,6 +41,7 @@ import {
   DepartmentStatus 
 } from '../../data/departmentDemoData';
 import { INITIAL_WARDS, WardItem } from '../../data/wardDemoData';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 import { INITIAL_BEDS, BedItem } from '../../data/bedDemoData';
 import { INITIAL_EQUIPMENT, EquipmentItem } from '../../data/equipmentDemoData';
 import { INITIAL_RESOURCES, ResourceItem } from '../../data/resourceDemoData';
@@ -61,7 +62,7 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
   // 1. Departments State (Persistent via localStorage)
   const [departments, setDepartments] = useState<DepartmentItem[]>(() => {
     try {
-      const saved = localStorage.getItem(DEPARTMENTS_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(DEPARTMENTS_STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -75,7 +76,7 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
   const saveDepartments = (newList: DepartmentItem[]) => {
     setDepartments(newList);
     try {
-      localStorage.setItem(DEPARTMENTS_STORAGE_KEY, JSON.stringify(newList));
+      localStorage.setItem(hospitalScopedKey(DEPARTMENTS_STORAGE_KEY), JSON.stringify(newList));
     } catch (e) {
       console.error('Failed to save departments to localStorage:', e);
     }
@@ -84,7 +85,7 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
   // 2. Shared Wards & Beds State (Synchronized across modules)
   const [wards, setWards] = useState<WardItem[]>(() => {
     try {
-      const saved = localStorage.getItem(WARDS_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(WARDS_STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -96,13 +97,13 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
   const saveWards = (newWards: WardItem[]) => {
     setWards(newWards);
     try {
-      localStorage.setItem(WARDS_STORAGE_KEY, JSON.stringify(newWards));
+      localStorage.setItem(hospitalScopedKey(WARDS_STORAGE_KEY), JSON.stringify(newWards));
     } catch {}
   };
 
   const [beds, setBeds] = useState<BedItem[]>(() => {
     try {
-      const saved = localStorage.getItem(BEDS_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(BEDS_STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -114,7 +115,7 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
   // Equipment & Resources (Read-only integration for Department Details)
   const [equipmentList] = useState<EquipmentItem[]>(() => {
     try {
-      const saved = localStorage.getItem(EQUIPMENT_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(EQUIPMENT_STORAGE_KEY));
       if (saved) return JSON.parse(saved);
     } catch {}
     return INITIAL_EQUIPMENT;
@@ -122,7 +123,7 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
 
   const [resourceList] = useState<ResourceItem[]>(() => {
     try {
-      const saved = localStorage.getItem(RESOURCES_STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(RESOURCES_STORAGE_KEY));
       if (saved) return JSON.parse(saved);
     } catch {}
     return INITIAL_RESOURCES;
@@ -299,11 +300,11 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
     setIsRefreshing(true);
     setTimeout(() => {
       try {
-        const savedDeps = localStorage.getItem(DEPARTMENTS_STORAGE_KEY);
+        const savedDeps = localStorage.getItem(hospitalScopedKey(DEPARTMENTS_STORAGE_KEY));
         if (savedDeps) setDepartments(JSON.parse(savedDeps));
-        const savedWards = localStorage.getItem(WARDS_STORAGE_KEY);
+        const savedWards = localStorage.getItem(hospitalScopedKey(WARDS_STORAGE_KEY));
         if (savedWards) setWards(JSON.parse(savedWards));
-        const savedBeds = localStorage.getItem(BEDS_STORAGE_KEY);
+        const savedBeds = localStorage.getItem(hospitalScopedKey(BEDS_STORAGE_KEY));
         if (savedBeds) setBeds(JSON.parse(savedBeds));
       } catch {}
       const now = new Date();
@@ -601,7 +602,7 @@ export const DepartmentsPage: React.FC<DepartmentsPageProps> = ({ onSelectTab })
     const updatedBeds = [...beds, ...newBeds];
     setBeds(updatedBeds);
     try {
-      localStorage.setItem(BEDS_STORAGE_KEY, JSON.stringify(updatedBeds));
+      localStorage.setItem(hospitalScopedKey(BEDS_STORAGE_KEY), JSON.stringify(updatedBeds));
     } catch {}
 
     setIsAddWardToDeptModalOpen(false);

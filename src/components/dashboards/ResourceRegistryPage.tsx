@@ -34,6 +34,7 @@ import {
   ResourceCategory, 
   ResourceStatus 
 } from '../../data/resourceDemoData';
+import { hospitalScopedKey } from '../../utils/hospitalSync';
 
 const STORAGE_KEY = 'medisync_resource_registry_data';
 
@@ -61,7 +62,7 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
   // 1. Data State (Persistent with localStorage)
   const [resources, setResources] = useState<ResourceItem[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
+      const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) return parsed;
@@ -76,7 +77,7 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
   const saveResources = (newResources: ResourceItem[]) => {
     setResources(newResources);
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newResources));
+      localStorage.setItem(hospitalScopedKey(STORAGE_KEY), JSON.stringify(newResources));
     } catch (e) {
       console.error('Failed to save resources to localStorage:', e);
     }
@@ -205,7 +206,7 @@ export const ResourceRegistryPage: React.FC<ResourceRegistryPageProps> = ({ onSe
     setIsRefreshing(true);
     setTimeout(() => {
       try {
-        const saved = localStorage.getItem(STORAGE_KEY);
+        const saved = localStorage.getItem(hospitalScopedKey(STORAGE_KEY));
         if (saved) {
           setResources(JSON.parse(saved));
         }

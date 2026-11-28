@@ -31,7 +31,7 @@ import {
   ArrowLeft
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { HOSPITALS } from '../../data/mockData';
+import { SEED_HOSPITALS as MEDI_ADMIN_SEED_HOSPITALS, LOCAL_STORAGE_KEY as MEDI_ADMIN_CACHE_KEY } from '../../medisync-admin/MediSyncAdminDashboard';
 import { Hospital } from '../../types';
 import { PatientDashboard } from '../dashboards/PatientDashboard';
 import { Sidebar } from '../layout/Sidebar';
@@ -524,7 +524,7 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
   const [registeredHospitals, setRegisteredHospitals] = useState<Hospital[]>([]);
 
   // Dedicated Original Patient Portal View State (when clicking View Hospital)
-  const [isViewingPortal, setIsViewingPortal] = useState(true);
+  const [isViewingPortal, setIsViewingPortal] = useState(false);
   const [portalTab, setPortalTab] = useState('dashboard');
   const [viewingHospital, setViewingHospital] = useState<CategorizedHospital | null>(null);
 
@@ -561,104 +561,107 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
   // Newly booked token highlight modal
   const [newlyGeneratedToken, setNewlyGeneratedToken] = useState<OPDToken | null>(null);
 
-  // Fetch registered hospitals on mount
+  // Map MediSync Admin RegisteredHospitalRecord -> CategorizedHospital for Patient Portal
+  const mapAdminRecordToCategorized = (h: any): CategorizedHospital => {
+    const totalBeds = h.totalBeds || 250;
+    const occupiedBeds = h.occupiedBeds ?? Math.round(totalBeds * 0.72);
+    const readyBeds = h.readyBeds ?? Math.max(10, totalBeds - occupiedBeds);
+    const icuAvailable = h.icuBeds || 35;
+    const ventilatorsAvailable = Math.max(4, Math.round(icuAvailable * 0.55));
+    const ownership = (h.ownership || '').toLowerCase();
+    const cat = (h.category || '').toLowerCase();
+    const typeStr = (h.hospitalType || h.type || '').toLowerCase();
+
+    let category: HospitalCategory = 'government';
+    let categoryLabel = '1. Government Hospital';
+    if (cat.includes('super') || typeStr.includes('super')) {
+      category = 'superspeciality';
+      categoryLabel = '3. Super-Speciality Hospital';
+    } else if (cat.includes('multi') || typeStr.includes('multi')) {
+      category = 'multispeciality';
+      categoryLabel = '2. Multi-Speciality Hospital';
+    } else if (ownership.includes('private') || typeStr.includes('private') || typeStr.includes('clinic')) {
+      category = 'private';
+      categoryLabel = '4. Private Hospital / Clinic';
+    }
+
+    return {
+      id: h.hospitalId || h.id || `reg-${h.registrationNumber || Math.random()}`,
+      districtId: (h.districtId || 'chennai').toLowerCase(),
+      districtName: h.districtName || 'Chennai',
+      name: h.hospitalName || h.name || 'Registered Hospital',
+      type: (h.hospitalType || h.type || 'Registered Hospital') as any,
+      location: h.hospitalAddress ? `${h.hospitalAddress}${h.areaLocality && !h.hospitalAddress.includes(h.areaLocality) ? ', ' + h.areaLocality : ''}` : (h.areaLocality || 'Tamil Nadu'),
+      availableDepartments: h.availableDepartments || ['General Medicine', 'Trauma & Emergency', 'Critical Care ICU', 'Outpatient OPD'],
+      status: 'Operational',
+      totalBeds,
+      occupiedBeds,
+      readyBeds,
+      prepBeds: Math.max(2, Math.round(totalBeds * 0.03)),
+      icuAvailable,
+      ventilatorsAvailable,
+      phone: h.hospitalPhone || h.phone || '+91 44 2530 5000',
+      emergencyContact: h.emergencyContact || '044-25305112',
+      category,
+      categoryLabel
+    };
+  };
+
+  // Fetch STRICTLY the hospitals registered in MediSync Admin (localStorage cache / SEED / API)
+  const [adminCategorizedHospitals, setAdminCategorizedHospitals] = useState<CategorizedHospital[]>(() => {
+    try {
+      const cached = localStorage.getItem(MEDI_ADMIN_CACHE_KEY);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map(mapAdminRecordToCategorized);
+        }
+      }
+    } catch {}
+    return MEDI_ADMIN_SEED_HOSPITALS.map(mapAdminRecordToCategorized);
+  });
+
   useEffect(() => {
-    const fetchRegistered = async () => {
+    const syncAdminHospitals = async () => {
+      let baseList: any[] = MEDI_ADMIN_SEED_HOSPITALS;
+      try {
+        const cached = localStorage.getItem(MEDI_ADMIN_CACHE_KEY);
+        if (cached) {
+          const parsed = JSON.parse(cached);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            baseList = parsed;
+          }
+        }
+      } catch {}
+
       try {
         const res = await fetch('http://localhost:5000/api/registered-hospitals');
         if (res.ok) {
           const data = await res.json();
           if (Array.isArray(data) && data.length > 0) {
-            const mapped: Hospital[] = data.map((h: any) => ({
-              id: h.id || `reg-${Math.random()}`,
-              districtId: h.districtId || 'chennai',
-              districtName: h.districtName || 'Chennai',
-              name: h.hospitalName,
-              type: h.hospitalType || 'Government District Headquarters',
-              location: h.hospitalAddress || h.areaLocality || 'Tamil Nadu',
-              availableDepartments: ['General Medicine', 'Trauma & Emergency', 'ICU', 'Outpatient OPD'],
-              status: 'Operational',
-              totalBeds: h.totalBeds || 120,
-              occupiedBeds: Math.round((h.totalBeds || 120) * 0.7),
-              readyBeds: Math.round((h.totalBeds || 120) * 0.25),
-              prepBeds: 5,
-              icuAvailable: h.icuBeds || 12,
-              ventilatorsAvailable: Math.round((h.icuBeds || 12) * 0.6),
-              phone: h.hospitalPhone || '+91 44 2530 5000',
-              emergencyContact: h.emergencyContact || '044-25305112'
-            }));
-            setRegisteredHospitals(mapped);
-            return;
+            const idMap = new Map<string, any>();
+            baseList.forEach(h => idMap.set(h.registrationNumber || h.id, h));
+            data.forEach(h => idMap.set(h.registrationNumber || h.id, h));
+            baseList = Array.from(idMap.values());
           }
         }
-      } catch (err) {
-        // Fallback to localStorage
-      }
+      } catch {}
 
-      try {
-        const stored = localStorage.getItem('medisync_registered_hospitals');
-        if (stored) {
-          const list = JSON.parse(stored);
-          if (Array.isArray(list) && list.length > 0) {
-            const mapped: Hospital[] = list.map((h: any) => ({
-              id: h.id || `reg-local-${Math.random()}`,
-              districtId: h.districtId || 'chennai',
-              districtName: h.districtName || 'Chennai',
-              name: h.hospitalName,
-              type: h.hospitalType || 'Registered Facility',
-              location: h.hospitalAddress || h.areaLocality || 'Tamil Nadu',
-              availableDepartments: ['General Medicine', 'Emergency', 'ICU'],
-              status: 'Operational',
-              totalBeds: h.totalBeds || 100,
-              occupiedBeds: 60,
-              readyBeds: 35,
-              prepBeds: 5,
-              icuAvailable: h.icuBeds || 10,
-              ventilatorsAvailable: 6,
-              phone: h.hospitalPhone || '+91 44 2530 5000',
-              emergencyContact: h.emergencyContact || '044-25305112'
-            }));
-            setRegisteredHospitals(mapped);
-          }
-        }
-      } catch (e) {
-        // Silent fallback
-      }
+      setAdminCategorizedHospitals(baseList.map(mapAdminRecordToCategorized));
     };
 
-    fetchRegistered();
+    syncAdminHospitals();
+    const handleStorageUpdate = () => syncAdminHospitals();
+    window.addEventListener('storage', handleStorageUpdate);
+    window.addEventListener('medisync_hospitals_updated', handleStorageUpdate);
+    return () => {
+      window.removeEventListener('storage', handleStorageUpdate);
+      window.removeEventListener('medisync_hospitals_updated', handleStorageUpdate);
+    };
   }, []);
 
-  // Combined hospitals: Registered first, then Extra Curated 4-Types, then Mock data
-  const allHospitals: CategorizedHospital[] = useMemo(() => {
-    const existingNames = new Set<string>();
-
-    // 1. Process registered hospitals from SQLite / localStorage
-    const regMapped: CategorizedHospital[] = registeredHospitals.map(h => {
-      existingNames.add(h.name.toLowerCase());
-      return categorizeHospital(h);
-    });
-
-    // 2. Extra curated 4-category hospitals (Govt, Multi, Super, Private)
-    const extraFiltered: CategorizedHospital[] = [];
-    for (const h of EXTRA_HOSPITALS) {
-      if (!existingNames.has(h.name.toLowerCase())) {
-        existingNames.add(h.name.toLowerCase());
-        extraFiltered.push(h);
-      }
-    }
-
-    // 3. Any additional mock hospitals
-    const mockCategorized: CategorizedHospital[] = [];
-    for (const h of HOSPITALS) {
-      if (!existingNames.has(h.name.toLowerCase())) {
-        existingNames.add(h.name.toLowerCase());
-        mockCategorized.push(categorizeHospital(h));
-      }
-    }
-
-    return [...regMapped, ...extraFiltered, ...mockCategorized];
-  }, [registeredHospitals]);
+  // ONLY show hospitals registered in MediSync Admin (no extra hardcoded mock hospitals)
+  const allHospitals: CategorizedHospital[] = adminCategorizedHospitals;
 
   // Filtered hospitals based on user input (Search query, District, and Type of Hospital)
   const filteredHospitals = useMemo(() => {
@@ -740,7 +743,7 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
   // ========================================================
   if (isViewingPortal) {
     return (
-      <div className="min-h-screen bg-[#F5F7FA] text-[#1E293B] flex font-sans">
+      <div className="h-screen overflow-hidden bg-[#FFF8F3] text-[#1E293B] flex font-sans">
         {/* Fixed Left Sidebar for Patient */}
         <Sidebar 
           currentTab={portalTab}
@@ -752,10 +755,12 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
             }
           }}
           activeRole="patient"
+          hospitalName={viewingHospital?.name || 'Rajiv Gandhi Government General Hospital (RGGGH)'}
+          districtName={viewingHospital?.districtName || 'Chennai'}
         />
 
-        {/* Main Layout Area */}
-        <div className="flex-1 flex flex-col min-w-0">
+        {/* Main Layout Area (Independently Scrollable) */}
+        <div className="flex-1 flex flex-col min-w-0 h-screen overflow-hidden">
           <Header 
             title={
               portalTab === 'dashboard' 
@@ -772,9 +777,9 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
             <div className="flex items-center justify-between pb-4">
               <button
                 onClick={() => setIsViewingPortal(false)}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-slate-200 hover:bg-blue-50/70 hover:border-blue-300 text-slate-700 hover:text-[#1A56DB] text-xs font-bold transition-all shadow-2xs cursor-pointer group"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-orange-200/80 hover:bg-[#FFF3E8] hover:border-orange-300 text-slate-700 hover:text-[#EA580C] text-xs font-bold transition-all shadow-2xs cursor-pointer group"
               >
-                <ArrowLeft className="w-4 h-4 text-[#1A56DB] group-hover:-translate-x-1 transition-transform" />
+                <ArrowLeft className="w-4 h-4 text-[#EA580C] group-hover:-translate-x-1 transition-transform" />
                 <span>&larr; Back to Hospital Search (மருத்துவமனை பட்டியல்)</span>
               </button>
 
@@ -1176,6 +1181,7 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
                       <h3
                         onClick={() => {
                           setIsViewingPortal(true);
+                          setPortalTab('dashboard');
                           setViewingHospital(hospital);
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
@@ -1251,6 +1257,7 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
                       <button
                         onClick={() => {
                           setIsViewingPortal(true);
+                          setPortalTab('dashboard');
                           setViewingHospital(hospital);
                           window.scrollTo({ top: 0, behavior: 'smooth' });
                         }}
@@ -1697,6 +1704,8 @@ export const PatientPortalDashboard: React.FC<PatientPortalDashboardProps> = ({
                 <button
                   onClick={() => {
                     setIsViewModalOpen(false);
+                    setIsViewingPortal(true);
+                    setPortalTab('dashboard');
                     setViewingHospital(selectedHospitalForView);
                     window.scrollTo({ top: 0, behavior: 'smooth' });
                   }}

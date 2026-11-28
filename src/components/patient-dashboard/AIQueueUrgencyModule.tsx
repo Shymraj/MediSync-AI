@@ -26,12 +26,19 @@ import {
   Calendar,
   Phone
 } from 'lucide-react';
+import {
+  isMatchingHospital,
+  OPD_REQUESTS_STORAGE_KEY,
+  OPD_UPDATE_EVENT,
+  getPatientTokenStorageKey
+} from '../../utils/hospitalSync';
 
 export interface AIQueueUrgencyModuleProps {
   hospitalName?: string;
   hospitalId?: string;
   patientName?: string;
   patientId?: string;
+  patientMobile?: string;
   onBackToOverview: () => void;
   onBookWithUrgency?: (assessmentData: any) => void;
 }
@@ -86,8 +93,9 @@ const CHRONIC_CONDITIONS = [
 export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
   hospitalName = 'Rajiv Gandhi Government General Hospital (RGGGH)',
   hospitalId = 'hosp-chn-01',
-  patientName = 'Karthik Subramanian',
-  patientId = 'usr-patient-demo',
+  patientName = 'Patient',
+  patientId = 'usr-patient',
+  patientMobile = '+91 98401 22345',
   onBackToOverview,
   onBookWithUrgency
 }) => {
@@ -105,9 +113,38 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
   // Initial state is null: Do NOT auto-evaluate on load!
   const [assessmentResult, setAssessmentResult] = useState<AssessmentResult | null>(null);
 
-  // Submission & Hospital Tracking State
-  const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null);
-  const [submittedRequestData, setSubmittedRequestData] = useState<any | null>(null);
+  // Submission & Hospital Tracking State (persists & restores strictly for THIS hospital)
+  const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(() => {
+    try {
+      const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+      if (stored) {
+        const list = JSON.parse(stored);
+        if (Array.isArray(list)) {
+          const found = list.find(
+            (r: any) => r.aiPriority && isMatchingHospital(r, hospitalId, hospitalName) && r.status !== 'Cancelled'
+          );
+          if (found?.requestId) return found.requestId;
+        }
+      }
+    } catch {}
+    return null;
+  });
+  const [submittedRequestData, setSubmittedRequestData] = useState<any | null>(() => {
+    try {
+      const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+      if (stored) {
+        const list = JSON.parse(stored);
+        if (Array.isArray(list)) {
+          return (
+            list.find(
+              (r: any) => r.aiPriority && isMatchingHospital(r, hospitalId, hospitalName) && r.status !== 'Cancelled'
+            ) || null
+          );
+        }
+      }
+    } catch {}
+    return null;
+  });
 
   // Toggle symptom pill
   const toggleSymptom = (symptom: string) => {
@@ -314,9 +351,7 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
     const isHigh = assessmentResult.ai_priority === 'HIGH';
 
     const reqId = `REQ-${hospAbbr}-${Math.floor(1000 + Math.random() * 9000)}`;
-    const tempToken = isCritical 
-      ? `PENDING-CRIT` 
-      : (isHigh ? `PENDING-PRIO` : `PENDING-OPD`);
+    const tempToken = 'AWAITING-APPROVAL';
 
     // Department routing based on symptoms
     const departmentName = selectedSymptoms.includes('chest discomfort')
@@ -334,7 +369,7 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
       timeSlot: isCritical ? 'IMMEDIATE EMERGENCY INTAKE' : 'Current OPD Session',
       purpose: selectedSymptoms.join(', ') + ` (Pain: ${painLevel}/10, Duration: ${symptomDurationHours}h)`,
       patientName: patientName,
-      patientMobile: '+91 98401 22345',
+      patientMobile: patientMobile || '+91 98401 22345',
       patientAgeGender: `${age} / Adult`,
       counterNumber: isCritical ? 'Red Bay / Casualty Room' : 'Awaiting Room Allocation',
       queuePosition: isCritical ? 1 : (isHigh ? 2 : 5),
@@ -358,16 +393,16 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
       }
     };
 
-    // Store directly into hospital requests queue so hospital staff dashboard sees it immediately
+    // Store directly under this hospitalId/hospitalName so ONLY the selected hospital receives it
     try {
-      const stored = localStorage.getItem('medisync_hospital_opd_requests');
+      const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
       let currentRequests = stored ? JSON.parse(stored) : [];
       if (!Array.isArray(currentRequests)) currentRequests = [];
-      // Prepend the new urgent request
       currentRequests.unshift(newRequestItem);
-      localStorage.setItem('medisync_hospital_opd_requests', JSON.stringify(currentRequests));
+      localStorage.setItem(OPD_REQUESTS_STORAGE_KEY, JSON.stringify(currentRequests));
+      localStorage.setItem(getPatientTokenStorageKey(hospitalId), JSON.stringify(newRequestItem));
       window.dispatchEvent(new Event('storage'));
-      window.dispatchEvent(new Event('medisync_opd_update'));
+      window.dispatchEvent(new CustomEvent(OPD_UPDATE_EVENT));
     } catch (e) {
       console.warn('Storage sync error:', e);
     }
@@ -404,10 +439,12 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
 
     const checkHospitalAcceptance = () => {
       try {
-        const stored = localStorage.getItem('medisync_hospital_opd_requests');
+        const stored = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
         if (stored) {
           const list = JSON.parse(stored);
-          const found = list.find((r: any) => r.requestId === submittedRequestId);
+          const found = list.find(
+            (r: any) => r.requestId === submittedRequestId && isMatchingHospital(r, hospitalId, hospitalName)
+          );
           if (found) {
             setSubmittedRequestData(found);
           }
@@ -415,15 +452,16 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
       } catch {}
     };
 
+    checkHospitalAcceptance();
     const interval = setInterval(checkHospitalAcceptance, 1500);
     window.addEventListener('storage', checkHospitalAcceptance);
-    window.addEventListener('medisync_opd_update', checkHospitalAcceptance);
+    window.addEventListener(OPD_UPDATE_EVENT, checkHospitalAcceptance);
     return () => {
       clearInterval(interval);
       window.removeEventListener('storage', checkHospitalAcceptance);
-      window.removeEventListener('medisync_opd_update', checkHospitalAcceptance);
+      window.removeEventListener(OPD_UPDATE_EVENT, checkHospitalAcceptance);
     };
-  }, [submittedRequestId]);
+  }, [submittedRequestId, hospitalId, hospitalName]);
 
   // Priority Styling Helpers
   const getPriorityBadge = (priority: string) => {
@@ -473,6 +511,7 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
   };
 
   const isHospitalAccepted = submittedRequestData && (submittedRequestData.status === 'In Queue' || submittedRequestData.status === 'Called' || submittedRequestData.status === 'Completed');
+  const isHospitalDeclined = submittedRequestData && submittedRequestData.status === 'Declined';
 
   return (
     <div className="space-y-6 pb-12 animate-fadeIn">
@@ -932,27 +971,54 @@ export const AIQueueUrgencyModule: React.FC<AIQueueUrgencyModuleProps> = ({
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2.5">
                   <div className={`w-9 h-9 rounded-2xl flex items-center justify-center font-black ${
-                    isHospitalAccepted ? 'bg-emerald-100 text-emerald-600' : 'bg-amber-100 text-amber-600'
+                    isHospitalAccepted
+                      ? 'bg-emerald-100 text-emerald-600'
+                      : isHospitalDeclined
+                      ? 'bg-rose-100 text-rose-600'
+                      : 'bg-amber-100 text-amber-600'
                   }`}>
-                    {isHospitalAccepted ? <CheckCircle2 className="w-5 h-5" /> : <Clock className="w-5 h-5 animate-spin" />}
+                    {isHospitalAccepted ? (
+                      <CheckCircle2 className="w-5 h-5" />
+                    ) : isHospitalDeclined ? (
+                      <AlertCircle className="w-5 h-5" />
+                    ) : (
+                      <Clock className="w-5 h-5 animate-spin" />
+                    )}
                   </div>
                   <div>
                     <h3 className="text-sm font-black text-slate-900">
-                      {isHospitalAccepted ? 'Consultation Accepted & Doctor Allocated' : 'Triage Request Submitted'}
+                      {isHospitalAccepted
+                        ? `Approved by ${hospitalName}`
+                        : isHospitalDeclined
+                        ? `Declined by ${hospitalName}`
+                        : `Sent to ${hospitalName} Triage Desk`}
                     </h3>
                     <span className="text-[10px] text-slate-400">Tracking ID: {submittedRequestId}</span>
                   </div>
                 </div>
 
                 <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${
-                  isHospitalAccepted ? 'bg-emerald-100 text-emerald-800 border border-emerald-300' : 'bg-amber-100 text-amber-800 border border-amber-300'
+                  isHospitalAccepted
+                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                    : isHospitalDeclined
+                    ? 'bg-rose-100 text-rose-800 border border-rose-300'
+                    : 'bg-amber-100 text-amber-800 border border-amber-300'
                 }`}>
-                  {isHospitalAccepted ? 'Accepted' : 'Awaiting Hospital'}
+                  {isHospitalAccepted ? 'Approved' : isHospitalDeclined ? 'Declined' : 'Awaiting Hospital'}
                 </span>
               </div>
 
               {/* Status Banner */}
-              {isHospitalAccepted ? (
+              {isHospitalDeclined ? (
+                <div className="p-4 rounded-2xl bg-rose-50 border border-rose-300 space-y-2">
+                  <div className="text-xs font-black text-rose-900">
+                    {hospitalName} could not accept this priority slot:
+                  </div>
+                  <div className="text-xs font-semibold text-rose-800 bg-white p-3 rounded-xl border border-rose-200">
+                    {submittedRequestData.declineReason || 'Doctor currently occupied in emergency bay. Please re-submit or choose another slot.'}
+                  </div>
+                </div>
+              ) : isHospitalAccepted ? (
                 <div className="p-4 rounded-2xl bg-emerald-50 border border-emerald-300 space-y-3">
                   <div className="flex items-center gap-2">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />

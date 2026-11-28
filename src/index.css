@@ -44,3 +44,104 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #94A3B8;
 }
+
+/* Animated 3D Doctor Character Keyframes (Patient Care Hero) */
+@keyframes doc-body-sway {
+  0%, 100% {
+    transform: translateY(0px) rotate(0deg);
+  }
+  50% {
+    transform: translateY(-5px) rotate(0.8deg);
+  }
+}
+
+@keyframes doc-eye-gaze {
+  0%, 16% {
+    transform: translate(0px, 0px);
+  }
+  24%, 40% {
+    transform: translate(-6px, -1.5px);
+  }
+  48%, 62% {
+    transform: translate(0px, 0px);
+  }
+  70%, 84% {
+    transform: translate(6px, -1px);
+  }
+  92%, 100% {
+    transform: translate(0px, 0px);
+  }
+}
+
+@keyframes doc-eyelid-top-blink {
+  0%, 42%, 48%, 84%, 90%, 100% {
+    transform: translateY(-100%);
+  }
+  45%, 87% {
+    transform: translateY(0%);
+  }
+}
+
+@keyframes doc-eyelid-bottom-blink {
+  0%, 42%, 48%, 84%, 90%, 100% {
+    transform: translateY(100%);
+  }
+  45%, 87% {
+    transform: translateY(0%);
+  }
+}
+
+@keyframes doc-thumbs-lift {
+  0%, 10% {
+    transform: translate(2px, 16px) rotate(-14deg);
+  }
+  28%, 40% {
+    transform: translate(0px, -6px) rotate(2deg) scale(1.02);
+  }
+  48% {
+    transform: translate(0px, -2px) rotate(-3deg) scale(1.015);
+  }
+  56%, 72% {
+    transform: translate(0px, -7px) rotate(2.5deg) scale(1.025);
+  }
+  90%, 100% {
+    transform: translate(2px, 16px) rotate(-14deg);
+  }
+}
+
+@keyframes doc-thumb-spark {
+  0%, 24%, 78%, 100% {
+    opacity: 0;
+    transform: scale(0.5) translateY(6px);
+  }
+  34%, 66% {
+    opacity: 1;
+    transform: scale(1.1) translateY(-2px);
+  }
+}
+
+.doc-body-sway {
+  animation: doc-body-sway 4s ease-in-out infinite;
+  transform-origin: 50% 95%;
+}
+
+.doc-eye-gaze {
+  animation: doc-eye-gaze 5.5s ease-in-out infinite;
+}
+
+.doc-eyelid-top-blink {
+  animation: doc-eyelid-top-blink 3.8s ease-in-out infinite;
+}
+
+.doc-eyelid-bottom-blink {
+  animation: doc-eyelid-bottom-blink 3.8s ease-in-out infinite;
+}
+
+.doc-thumbs-lift {
+  animation: doc-thumbs-lift 3.8s ease-in-out infinite;
+  transform-origin: 24% 87%;
+}
+
+.doc-thumb-spark {
+  animation: doc-thumb-spark 3.8s ease-in-out infinite;
+}

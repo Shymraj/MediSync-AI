@@ -129,7 +129,9 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <>
       <RealtimeEmergencyBanner />
-      <header className="sticky top-0 z-30 bg-white border-b border-[#E2E8F0] px-4 sm:px-6 py-3 flex items-center justify-between gap-3 shadow-2xs">
+      <header className={`sticky top-0 z-30 border-b px-4 sm:px-6 py-3 flex items-center justify-between gap-3 shadow-2xs ${
+        isPatient ? 'bg-[#FFFDFB] border-[#F5E0CE]' : 'bg-white border-[#E2E8F0]'
+      }`}>
         
         {/* ======================================================== */}
         {/* LEFT: TITLE, SUBTITLE & ROLE BADGE                      */}
@@ -139,7 +141,11 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               onClick={onNavigateHome}
               title="Return to MediSync AI Landing Page"
-              className="p-1.5 rounded-xl text-slate-400 hover:text-[#1A56DB] hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+              className={`p-1.5 rounded-xl transition-colors cursor-pointer shrink-0 ${
+                isPatient
+                  ? 'text-[#EA580C]/70 hover:text-[#EA580C] hover:bg-[#FFF3E8]'
+                  : 'text-slate-400 hover:text-[#1A56DB] hover:bg-slate-100'
+              }`}
             >
               <Home className="w-4 h-4" />
             </button>
@@ -156,7 +162,7 @@ export const Header: React.FC<HeaderProps> = ({
                   : displayRole === 'nurse'
                   ? 'bg-amber-50 text-amber-700 border border-amber-200'
                   : displayRole === 'patient'
-                  ? 'bg-purple-50 text-purple-700 border border-purple-200'
+                  ? 'bg-[#FFF0E5] text-[#EA580C] border border-[#FED7AA]'
                   : 'bg-blue-50 text-[#1A56DB] border border-blue-200'
               }`}>
                 {displayRole} portal
@@ -263,7 +269,11 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
 
           {/* Optional Emergency 24x7 helpline pill */}
-          <div className="hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-xl bg-red-50 border border-red-200 text-red-700 text-[11px] font-bold">
+          <div className={`hidden 2xl:flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-[11px] font-bold border ${
+            isPatient
+              ? 'bg-[#FFF3E8] border-[#FED7AA] text-[#EA580C]'
+              : 'bg-red-50 border-red-200 text-red-700'
+          }`}>
             <PhoneCall className="w-3 h-3 animate-pulse" />
             <span>24x7: {emergencyPhone}</span>
           </div>
@@ -368,9 +378,11 @@ export const Header: React.FC<HeaderProps> = ({
           */}
           <div className="flex items-center gap-2 pl-2 border-l border-[#E2E8F0]">
             <img
-              src={user?.avatarUrl || 'https://api.dicebear.com/7.x/initials/svg?seed=MS&backgroundColor=2563a6'}
+              src={user?.avatarUrl || (isPatient ? 'https://api.dicebear.com/7.x/initials/svg?seed=MS&backgroundColor=ea580c' : 'https://api.dicebear.com/7.x/initials/svg?seed=MS&backgroundColor=2563a6')}
               alt="Profile"
-              className="w-8 h-8 rounded-full border border-slate-200 ring-1 ring-slate-100 object-cover shrink-0"
+              className={`w-8 h-8 rounded-full border object-cover shrink-0 ${
+                isPatient ? 'border-orange-200 ring-1 ring-orange-100' : 'border-slate-200 ring-1 ring-slate-100'
+              }`}
             />
             <div className="hidden lg:block text-left text-xs">
               <div className="font-bold text-[#1E293B] truncate max-w-[120px]">

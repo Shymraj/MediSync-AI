@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Building2, 
   MapPin, 
@@ -25,9 +25,14 @@ import {
   BadgeCheck
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import {
+  isMatchingHospital,
+  OPD_REQUESTS_STORAGE_KEY,
+  OPD_UPDATE_EVENT
+} from '../../utils/hospitalSync';
 
 interface HospitalOverviewViewProps {
-  onSelectRole: (role: 'doctor' | 'nurse' | 'admin') => void;
+  onSelectRole: (role: 'doctor' | 'nurse' | 'admin' | 'patient') => void;
   isAdminUnlocked: boolean;
   activeTab?: string;
 }
@@ -39,7 +44,40 @@ export const HospitalOverviewView: React.FC<HospitalOverviewViewProps> = ({
 }) => {
   const { user, tempOnboarding } = useApp();
 
+  const hospitalId = tempOnboarding.hospitalId || user?.hospitalId || tempOnboarding.registrationNumber || 'Hos_Id-101';
   const hospitalName = tempOnboarding.hospitalName || user?.hospitalName || 'Rajiv Gandhi Government General Hospital (RGGGH)';
+
+  const [incomingStats, setIncomingStats] = useState({ total: 0, pending: 0, aiCritical: 0 });
+
+  useEffect(() => {
+    const syncIncoming = () => {
+      try {
+        const raw = localStorage.getItem(OPD_REQUESTS_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            const mine = parsed.filter((r: any) => isMatchingHospital(r, hospitalId, hospitalName));
+            setIncomingStats({
+              total: mine.length,
+              pending: mine.filter((r: any) => r.status === 'Pending').length,
+              aiCritical: mine.filter((r: any) => r.aiPriority && r.status === 'Pending').length
+            });
+            return;
+          }
+        }
+      } catch {}
+      setIncomingStats({ total: 0, pending: 0, aiCritical: 0 });
+    };
+    syncIncoming();
+    window.addEventListener('storage', syncIncoming);
+    window.addEventListener(OPD_UPDATE_EVENT, syncIncoming);
+    const interval = setInterval(syncIncoming, 3000);
+    return () => {
+      window.removeEventListener('storage', syncIncoming);
+      window.removeEventListener(OPD_UPDATE_EVENT, syncIncoming);
+      clearInterval(interval);
+    };
+  }, [hospitalId, hospitalName]);
   const registrationNumber = tempOnboarding.registrationNumber || 'TN-MED-REG-2026-8941';
   const hospitalType = tempOnboarding.hospitalType || 'Government Teaching Hospital';
   const ownership = tempOnboarding.ownership || 'Government';
@@ -175,6 +213,45 @@ export const HospitalOverviewView: React.FC<HospitalOverviewViewProps> = ({
             <div className="text-[11px] text-slate-500 font-medium">18 Doctors &bull; 42 Nurses</div>
           </div>
         </div>
+      </div>
+
+      {/* Live Incoming Citizen OPD & AI Queue Requests strictly for this Hospital */}
+      <div className="bg-linear-to-r from-purple-50 via-white to-blue-50 rounded-3xl p-5 sm:p-6 border border-purple-200/80 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex items-start gap-4">
+          <div className="w-12 h-12 rounded-2xl bg-purple-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+            <Users className="w-6 h-6" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-xs font-black uppercase tracking-wider text-purple-800">
+                Patient Portal &amp; AI Queue Intake &bull; {hospitalName}
+              </span>
+              {incomingStats.pending > 0 && (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-amber-100 text-amber-800 border border-amber-300 animate-pulse">
+                  {incomingStats.pending} Pending Approval
+                </span>
+              )}
+              {incomingStats.aiCritical > 0 && (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black bg-red-100 text-red-700 border border-red-300">
+                  {incomingStats.aiCritical} AI Priority Requests
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-slate-600 mt-1">
+              {incomingStats.total > 0
+                ? `${incomingStats.total} patient booking(s) received directly from ${hospitalName}'s Patient Portal.`
+                : `No patient OPD or AI Queue requests yet for ${hospitalName}. Bookings made in ${hospitalName}'s Patient Portal appear here exclusively.`}
+            </p>
+          </div>
+        </div>
+
+        <button
+          onClick={() => onSelectRole('patient')}
+          className="px-5 py-3 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs shadow-xs transition-colors cursor-pointer flex items-center justify-center gap-2 shrink-0"
+        >
+          <span>Open Patient Portal Desk ({incomingStats.pending} Pending)</span>
+          <ArrowRight className="w-4 h-4" />
+        </button>
       </div>
 
       {/* 

@@ -14,6 +14,7 @@ import {
   INITIAL_WORKFLOW_STATS 
 } from '../data/workflowDemoData';
 import { hospitalDataService } from './hospitalDataService';
+import { hospitalScopedKey } from '../utils/hospitalSync';
 
 const RULES_STORAGE_KEY = 'medisync_workflow_rules_v1';
 const EXECUTIONS_STORAGE_KEY = 'medisync_workflow_executions_v1';
@@ -43,13 +44,13 @@ export class WorkflowEngine {
 
     if (typeof window !== 'undefined') {
       try {
-        const storedRules = localStorage.getItem(RULES_STORAGE_KEY);
+        const storedRules = localStorage.getItem(hospitalScopedKey(RULES_STORAGE_KEY));
         this.rules = storedRules ? JSON.parse(storedRules) : [...DEFAULT_WORKFLOW_RULES];
 
-        const storedExecutions = localStorage.getItem(EXECUTIONS_STORAGE_KEY);
+        const storedExecutions = localStorage.getItem(hospitalScopedKey(EXECUTIONS_STORAGE_KEY));
         this.executions = storedExecutions ? JSON.parse(storedExecutions) : [...INITIAL_WORKFLOW_EXECUTIONS];
 
-        const storedNotifs = localStorage.getItem(NOTIFICATIONS_RULES_KEY);
+        const storedNotifs = localStorage.getItem(hospitalScopedKey(NOTIFICATIONS_RULES_KEY));
         this.notificationRules = storedNotifs ? JSON.parse(storedNotifs) : [...SMART_NOTIFICATION_RULES];
       } catch (e) {
         console.warn('Failed to load workflow state from localStorage:', e);
@@ -70,9 +71,9 @@ export class WorkflowEngine {
   private persist() {
     if (typeof window === 'undefined') return;
     try {
-      localStorage.setItem(RULES_STORAGE_KEY, JSON.stringify(this.rules));
-      localStorage.setItem(EXECUTIONS_STORAGE_KEY, JSON.stringify(this.executions));
-      localStorage.setItem(NOTIFICATIONS_RULES_KEY, JSON.stringify(this.notificationRules));
+      localStorage.setItem(hospitalScopedKey(RULES_STORAGE_KEY), JSON.stringify(this.rules));
+      localStorage.setItem(hospitalScopedKey(EXECUTIONS_STORAGE_KEY), JSON.stringify(this.executions));
+      localStorage.setItem(hospitalScopedKey(NOTIFICATIONS_RULES_KEY), JSON.stringify(this.notificationRules));
       window.dispatchEvent(new CustomEvent(WORKFLOW_UPDATED_EVENT, { detail: { timestamp: Date.now() } }));
     } catch (e) {
       console.warn('Failed to persist workflow state:', e);
